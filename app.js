@@ -6,31 +6,36 @@
 
 /* ---------- Классификатор единиц измерения (ОКЕИ, основные позиции) ---- */
 const OKEI = [
-  { re: /^(шт|шту?к[аи]?|штук|pcs?|pc|pce|piece?s?|ea|each|единиц[аы]?)\.?$/i, num: "796", let: "ШТ"    },
-  { re: /^(кг|килограмм(ов|а)?|kgs?|kilogram?s?)\.?$/i,                        num: "166", let: "КГ"    },
-  { re: /^(г|гр|грамм(ов|а)?|g|gr|grams?)\.?$/i,                               num: "163", let: "Г"     },
-  { re: /^(т|тонн[аы]?|t|ton(ne)?s?|mt)\.?$/i,                                 num: "168", let: "Т"     },
-  { re: /^(м|метр(ов|а)?|m|meters?|metres?)\.?$/i,                             num: "006", let: "М"     },
-  { re: /^(см|сантиметр(ов|а)?|cm)\.?$/i,                                      num: "004", let: "СМ"    },
-  { re: /^(мм|миллиметр(ов|а)?|mm)\.?$/i,                                      num: "003", let: "ММ"    },
-  { re: /^(пог\.?\s?м|п\.?м|погонн\w*\s*метр\w*)\.?$/i,                        num: "018", let: "ПОГ. М"},
-  { re: /^(м2|м²|кв\.?\s?м|sq\.?\s?m|sqm|m2)\.?$/i,                            num: "055", let: "М2"    },
-  { re: /^(м3|м³|куб\.?\s?м|cbm|m3)\.?$/i,                                     num: "113", let: "М3"    },
-  { re: /^(л|литр(ов|а)?|l|ltr|liters?|litres?)\.?$/i,                         num: "112", let: "Л"     },
-  { re: /^(мл|миллилитр(ов|а)?|ml)\.?$/i,                                      num: "111", let: "СМ3"   },
-  { re: /^(пар[аы]?|pairs?|pr)\.?$/i,                                          num: "715", let: "ПАР"   },
-  { re: /^(компл(ект(ов|а)?)?|sets?|kit)\.?$/i,                                num: "839", let: "КОМПЛ" },
-  { re: /^(набор(ов|а)?)\.?$/i,                                                num: "704", let: "НАБОР" },
-  { re: /^(упак(овок|овка|овки)?|уп|packs?|packages?|pkg)\.?$/i,               num: "778", let: "УПАК"  },
-  { re: /^(рул(он(ов|а)?)?|rolls?)\.?$/i,                                      num: "736", let: "РУЛ"   },
-  { re: /^(лист(ов|а)?|sheets?)\.?$/i,                                         num: "625", let: "Л."    },
-  { re: /^(бухт[аы]?|coils?)\.?$/i,                                            num: "868", let: "БУХТА" },
-  { re: /^(флак(он(ов|а)?)?|bottles?|btl)\.?$/i,                               num: "872", let: "ФЛАК"  },
+  { re: /^(шт|шту?к[аи]?|штук|pcs?|pc|pce|piece?s?|ea|each|единиц[аы]?)\.?$/i, num: "796", let: "шт"    },
+  { re: /^(кг|килограмм(ов|а)?|kgs?|kilogram?s?)\.?$/i,                        num: "166", let: "кг"    },
+  { re: /^(г|гр|грамм(ов|а)?|g|gr|grams?)\.?$/i,                               num: "163", let: "г"     },
+  { re: /^(т|тонн[аы]?|t|ton(ne)?s?|mt)\.?$/i,                                 num: "168", let: "т"     },
+  { re: /^(м|метр(ов|а)?|m|meters?|metres?)\.?$/i,                             num: "006", let: "м"     },
+  { re: /^(см|сантиметр(ов|а)?|cm)\.?$/i,                                      num: "004", let: "см"    },
+  { re: /^(мм|миллиметр(ов|а)?|mm)\.?$/i,                                      num: "003", let: "мм"    },
+  { re: /^(пог\.?\s?м|п\.?м|погонн\w*\s*метр\w*)\.?$/i,                        num: "018", let: "пог. м"},
+  { re: /^(м2|м²|кв\.?\s?м|sq\.?\s?m|sqm|m2)\.?$/i,                            num: "055", let: "м2"    },
+  { re: /^(м3|м³|куб\.?\s?м|cbm|m3)\.?$/i,                                     num: "113", let: "м3"    },
+  { re: /^(л|литр(ов|а)?|l|ltr|liters?|litres?)\.?$/i,                         num: "112", let: "л"     },
+  { re: /^(мл|миллилитр(ов|а)?|ml)\.?$/i,                                      num: "111", let: "см3"   },
+  { re: /^(пар[аы]?|pairs?|pr)\.?$/i,                                          num: "715", let: "пар"   },
+  { re: /^(компл(ект(ов|а)?)?|sets?|kit)\.?$/i,                                num: "839", let: "компл" },
+  { re: /^(набор(ов|а)?)\.?$/i,                                                num: "704", let: "набор" },
+  { re: /^(упак(овок|овка|овки)?|уп|packs?|packages?|pkg)\.?$/i,               num: "778", let: "упак"  },
+  { re: /^(рул(он(ов|а)?)?|rolls?)\.?$/i,                                      num: "736", let: "рул"   },
+  { re: /^(лист(ов|а)?|sheets?)\.?$/i,                                         num: "625", let: "л."    },
+  { re: /^(бухт[аы]?|coils?)\.?$/i,                                            num: "868", let: "бухта" },
+  { re: /^(флак(он(ов|а)?)?|bottles?|btl)\.?$/i,                               num: "872", let: "флак"  },
 ];
 
 function unitCodes(raw) {
   if (!raw) return { num: "", let: "" };
   const s = String(raw).trim().toLowerCase().replace(/\s+/g, " ");
+  /* Если в колонке единицы измерения стоит цифровой код ОКЕИ — распознаём его. */
+  if (/^\d{3}$/.test(s)) {
+    const byNum = OKEI.find((u) => u.num === s);
+    if (byNum) return { num: byNum.num, let: byNum.let };
+  }
   for (const u of OKEI) if (u.re.test(s)) return { num: u.num, let: u.let };
   return { num: "", let: "" };
 }
@@ -46,7 +51,7 @@ const FIELD_PATTERNS = [
   ["qty",      /кол-?\s?во|количеств|qty|quantity|кол\.(?!\s*ед)/i],
   ["unit",     /ед\.?\s?изм|единиц[аы]\s*измерени|^unit s?$|^ед\.?$|measure/i],
   ["article",  /артикул|код\s*(изделия|товара)|модель|изделие|model|article|part\s*(no|№|number)|item\s*(no|№|code)|sku|art\.?(?![a-z])|ref\.?\s*(no|№)?/i],
-  ["place",    /груз\w*\s*мест|мест[оа]\s*№?|№\s*мест|place|box\s*(no|№|number)?|carton|кор(об|обк)\w*|паллет|pallet|case\s*(no|№)/i],
+  ["place",    /груз\w*\s*мест|мест[оа]\s*№?|№\s*мест|place|package\s*(no|№|number)?|box\s*(no|№|number)?|carton|кор(об|обк)\w*|паллет|pallet|case\s*(no|№)/i],
   ["name",     /наименован|назван|описан|товар|description|goods|name|item(?!\s*(no|№|code))|product|commodity/i],
 ];
 
@@ -76,6 +81,13 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 const round2 = (n) => Math.round(n * 100) / 100;
 const normKey = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 const isTotalsRow = (s) => /^\s*(итого|всего|итог|grand\s*total|total|sum)([\s:.,]|$)/i.test(String(s || ""));
+/* Заглушки вида «--», «—», «n/a» считаем пустым значением. */
+const cleanVal = (v) => {
+  const s = String(v ?? "").trim();
+  return /^[-–—_.\s]*$|^(n\/?a|нет|б\/н)$/i.test(s) ? "" : s;
+};
+const hasLetters = (s) => /[A-Za-zА-Яа-яЁё]{3,}/.test(String(s || ""));
+const hasCyrillic = (s) => /[А-Яа-яЁё]/.test(String(s || ""));
 
 /* ---------- Состояние ---------------------------------------------------- */
 const state = { files: [], rows: [], notes: [] };
@@ -169,8 +181,9 @@ async function readSpreadsheet(file) {
 /* Поиск строки заголовка и извлечение данных из двумерного массива. */
 function extractFromGrid(rows, fileName) {
   let headerIdx = -1, colMap = null, bestScore = 0;
-  const scanLimit = Math.min(rows.length, 40);
-  for (let r = 0; r < scanLimit; r++) {
+  /* Шапка документа (реквизиты, адреса) может занимать десятки строк —
+     ищем строку заголовка таблицы по всему листу. */
+  for (let r = 0; r < rows.length; r++) {
     const map = {};
     let score = 0;
     rows[r].forEach((cell, c) => {
@@ -182,31 +195,80 @@ function extractFromGrid(rows, fileName) {
   if (headerIdx < 0) return [];
 
   const items = [];
+  let lastPlace = ""; // № места часто указан только на первой строке места — наследуем вниз
   for (let r = headerIdx + 1; r < rows.length; r++) {
     const row = rows[r];
     const get = (f) => (f in colMap ? row[colMap[f]] : "");
-    const name = String(get("name") || "").trim();
-    const article = String(get("article") || "").trim();
+    const name = cleanVal(get("name"));
+    const article = cleanVal(get("article"));
     if (!name && !article) continue;
-    if (isTotalsRow(name) || isTotalsRow(row[0])) continue;
+    if (isTotalsRow(name) || isTotalsRow(row[0]) || isTotalsRow(get("article"))) continue;
+    /* Отсеиваем строки нумерации граф («1», «1а», «2а»…) и прочий мусор:
+       в наименовании должно быть хотя бы 3 буквы подряд, либо внятный артикул. */
+    if (!hasLetters(name) && !(article.length >= 4)) continue;
+    /* Двухстрочные заголовки (EN + RU): если ячейки строки сами похожи
+       на названия колонок — это продолжение шапки, а не товар. */
+    let headerish = 0;
+    for (const c of Object.values(colMap)) {
+      const v = String(row[c] ?? "").trim();
+      if (v && detectField(v)) headerish++;
+    }
+    if (headerish >= 2) continue;
 
-    const unitRaw = String(get("unit") || "").trim();
+    let place = cleanVal(get("place"));
+    if ("place" in colMap) {
+      if (place) lastPlace = place;
+      else place = lastPlace;
+    }
+
+    const unitRaw = cleanVal(get("unit"));
     const item = {
       source: fileName,
       name, article,
       unitRaw,
-      qty:      parseNum(get("qty")),
-      price:    parseNum(get("price")),
-      total:    parseNum(get("total")),
-      netUnit:  parseNum(get("netUnit")),
-      netTotal: parseNum(get("netTotal")),
-      gross:    parseNum(get("gross")),
-      place:    String(get("place") ?? "").trim(),
+      qty:      parseNum(cleanVal(get("qty"))),
+      price:    parseNum(cleanVal(get("price"))),
+      total:    parseNum(cleanVal(get("total"))),
+      netUnit:  parseNum(cleanVal(get("netUnit"))),
+      netTotal: parseNum(cleanVal(get("netTotal"))),
+      gross:    parseNum(cleanVal(get("gross"))),
+      place,
     };
     if (item.qty === null && item.total === null && item.netTotal === null && !item.article) continue;
     items.push(item);
   }
-  return items;
+  return mergeTranslations(items);
+}
+
+/* Двуязычные документы: один и тот же товар идёт двумя строками — русской
+   и английской (перевод), с одинаковыми количеством, ценой и стоимостью.
+   Латинскую строку-перевод склеиваем с русской, не суммируя. */
+function mergeTranslations(items) {
+  const eq = (a, b) => (a === null && b === null) || (a !== null && b !== null && Math.abs(a - b) < 0.01);
+  const cyr = items.filter((it) => hasCyrillic(it.name));
+  if (!cyr.length) return items;
+  const used = new Set();
+  const absorbed = new Set();
+  for (const it of items) {
+    if (hasCyrillic(it.name)) continue;
+    const twin = cyr.find((c) =>
+      !used.has(c) &&
+      eq(c.qty, it.qty) && eq(c.total, it.total) && eq(c.price, it.price) &&
+      (!it.article || !c.article || normKey(it.article) === normKey(c.article)) &&
+      (!it.place || !c.place || c.place === it.place)
+    );
+    if (twin) {
+      used.add(twin);
+      absorbed.add(it);
+      if (!twin.article && it.article) twin.article = it.article;
+      if (!twin.unitRaw && it.unitRaw) twin.unitRaw = it.unitRaw;
+      if (twin.netTotal === null) twin.netTotal = it.netTotal;
+      if (twin.netUnit === null)  twin.netUnit  = it.netUnit;
+      if (twin.gross === null)    twin.gross    = it.gross;
+      if (!twin.place && it.place) twin.place   = it.place;
+    }
+  }
+  return items.filter((it) => !absorbed.has(it));
 }
 
 /* PDF: извлекаем текст постранично, собираем строки по вертикальной позиции. */
@@ -302,13 +364,32 @@ function mergeItems(allItems) {
     }
   }
 
-  /* 2. Между файлами: собираем по (наименование+артикул), место — объединяем. */
-  const byGoods = new Map(); // gkey → { parts: [ {file, place, ...} ] }
+  /* 2. Между файлами группируем ПО НАИМЕНОВАНИЮ: в инвойсе артикула может
+     не быть, а в упаковочном листе он есть — жёсткий ключ «имя+артикул»
+     помешал бы объединению. Если под одним наименованием встречаются РАЗНЫЕ
+     артикулы — разводим по артикулам (это разные товары). */
+  const byName = new Map(); // normName → parts[]
   for (const [, m] of perFile) {
     for (const [, it] of m) {
-      const gkey = normKey(it.name) + "|" + normKey(it.article);
-      if (!byGoods.has(gkey)) byGoods.set(gkey, []);
-      byGoods.get(gkey).push(it);
+      const nkey = normKey(it.name) || "«без наименования» " + normKey(it.article);
+      if (!byName.has(nkey)) byName.set(nkey, []);
+      byName.get(nkey).push(it);
+    }
+  }
+
+  const byGoods = new Map(); // итоговые группы (порядок вставки = порядок появления)
+  for (const [nkey, parts] of byName) {
+    const arts = [...new Set(parts.map((p) => normKey(p.article)).filter(Boolean))];
+    if (arts.length <= 1) {
+      byGoods.set(nkey, parts);
+    } else {
+      /* одно имя, разные артикулы → отдельные товары; части без артикула
+         остаются собственной группой (однозначно отнести их нельзя) */
+      for (const p of parts) {
+        const sub = nkey + "|" + normKey(p.article);
+        if (!byGoods.has(sub)) byGoods.set(sub, []);
+        byGoods.get(sub).push(p);
+      }
     }
   }
 
@@ -471,7 +552,7 @@ buildBtn.addEventListener("click", async () => {
     }
     const rows = mergeItems(all);
     distributeGross(rows);
-    rows.sort((a, b) => a.name.localeCompare(b.name, "ru"));
+    /* порядок строк — порядок появления товаров в документах (как в инвойсе) */
     state.rows = rows;
     renderResult();
     setStatus(`Готово: товаров — ${rows.length}, обработано файлов — ${state.files.length}.`);
