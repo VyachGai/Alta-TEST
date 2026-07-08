@@ -997,24 +997,14 @@ function applyMathErrors(rows, footerErrors) {
   };
   for (const row of rows) {
     if (!row.mathErrors || !row.mathErrors.length) continue;
-    const msgs = [];
-    for (const e of row.mathErrors) {
+    const msgs = row.mathErrors.map((e) => {
       const lbl = fieldLabel[e.field] || e.field;
-      /* Заменяем значение в ячейке на расчётное; исходное — в замечания. */
-      if (e.field === "total") {
-        msgs.push(`В ячейке — расчётное значение (${e.calc}); в файле указано: ${e.stated} (${lbl})`);
-        row.total = e.calc;
-      } else if (e.field === "netTotal") {
-        msgs.push(`В ячейке — расчётное значение (${e.calc}); в файле указано: ${e.stated} (${lbl})`);
-        row.netTotal = e.calc;
-      } else {
-        msgs.push(`Расчёт (${e.calc}) ≠ значению в файле (${e.stated}): ${lbl}`);
-      }
-    }
-    row.mathFlag    = true;
-    row.flagged     = true;
+      return `Расчёт (${e.calc}) ≠ значению в файле (${e.stated}): ${lbl}`;
+    });
+    row.mathFlag = true;   // красная заливка
+    row.flagged  = true;
     row.mathComment = msgs.join("; ");
-    row.comment     = row.comment
+    row.comment = row.comment
       ? row.comment + "; " + row.mathComment
       : row.mathComment;
   }
