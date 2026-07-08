@@ -199,13 +199,13 @@ function extractFromGrid(rows, fileName) {
   for (let r = headerIdx + 1; r < rows.length; r++) {
     const row = rows[r];
     const get = (f) => (f in colMap ? row[colMap[f]] : "");
-    const name = cleanVal(get("name"));
-    const article = cleanVal(get("article"));
+    const name = cleanVal(get("name")).replace(/\s+/g, " ");
+    const article = cleanVal(get("article")).replace(/\s+/g, " ");
     if (!name && !article) continue;
     if (isTotalsRow(name) || isTotalsRow(row[0]) || isTotalsRow(get("article"))) continue;
     /* Отсеиваем строки нумерации граф («1», «1а», «2а»…) и прочий мусор:
        в наименовании должно быть хотя бы 3 буквы подряд, либо внятный артикул. */
-    if (!hasLetters(name) && !(article.length >= 4)) continue;
+    if (!hasLetters(name) && !/[A-Za-zА-Яа-я0-9]{4,}/.test(article)) continue;
     /* Двухстрочные заголовки (EN + RU): если ячейки строки сами похожи
        на названия колонок — это продолжение шапки, а не товар. */
     let headerish = 0;
@@ -271,37 +271,242 @@ function mergeTranslations(items) {
   return items.filter((it) => !absorbed.has(it));
 }
 
-/* PDF: извлекаем текст постранично, собираем строки по вертикальной позиции. */
+/* PDF: восстанавливаем таблицу по координатам текстовых фрагментов.
+   Алгоритм: многострочный заголовок → x-границы колонок → «якорные» линии
+   товаров → фрагменты соседних линий (переносы наименований) приписываются
+   ближайшему якорю. Артефакты печати объединённых ячеек Excel (номера мест,
+   отрисованные за пределами страницы или на чужих строках) отсекаются. */
 async function readPdf(file) {
   if (!window.pdfjsLib) throw new Error("Библиотека pdf.js не загрузилась. Проверьте доступ в интернет.");
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-  let text = "";
+  const pages = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
+    const vp = page.getViewport({ scale: 1 });
     const content = await page.getTextContent();
-    const lines = new Map(); // y → items[]
+    const frags = [];
     for (const it of content.items) {
-      const y = Math.round(it.transform[5]);
-      let key = null;
-      for (const k of lines.keys()) if (Math.abs(k - y) <= 2) { key = k; break; }
-      if (key === null) { key = y; lines.set(key, []); }
-      lines.get(key).push({ x: it.transform[4], str: it.str });
+      if (!it.str || !it.str.trim()) continue;
+      frags.push({ x: it.transform[4], y: it.transform[5], w: it.width || it.str.length * 4, str: it.str });
     }
-    const sorted = [...lines.entries()].sort((a, b) => b[0] - a[0]);
-    for (const [, parts] of sorted) {
-      parts.sort((a, b) => a.x - b.x);
-      let line = "", prevEnd = null;
-      for (const part of parts) {
-        if (prevEnd !== null && part.x - prevEnd > 8) line += "\t";
-        line += part.str;
-        prevEnd = part.x + part.str.length * 4;
-      }
-      text += line + "\n";
-    }
-    text += "\n";
+    pages.push({ h: vp.height, frags });
   }
-  return extractFromText(text, file.name);
+  return extractFromPdfPages(pages, file.name);
+}
+
+let pdfWarnings = [];
+
+/* Фрагменты → «линии» (кластеризация по y, сверху вниз). */
+function pdfLines(frags) {
+  const lines = [];
+  const sorted = [...frags].sort((a, b) => b.y - a.y || a.x - b.x);
+  for (const f of sorted) {
+    const line = lines.find((L) => Math.abs(L.y - f.y) <= 2.5);
+    if (line) line.frags.push(f);
+    else lines.push({ y: f.y, frags: [f] });
+  }
+  for (const L of lines) {
+    L.frags.sort((a, b) => a.x - b.x);
+    const cells = [];
+    for (const f of L.frags) {
+      const last = cells[cells.length - 1];
+      if (last && f.x - (last.x + last.w) < 4) {
+        last.str += (f.x - (last.x + last.w) > 0.7 ? " " : "") + f.str;
+        last.w = f.x + f.w - last.x;
+      } else cells.push({ x: f.x, w: f.w, str: f.str });
+    }
+    L.cells = cells;
+  }
+  return lines;
+}
+
+function extractFromPdfPages(pages, fileName) {
+  const stray = [];        // фрагменты за пределами страницы — артефакты merged-ячеек
+  const pageLines = pages.map((pg) => {
+    const inPage = [], out = [];
+    for (const f of pg.frags) (f.y < -2 || f.y > pg.h + 2 ? out : inPage).push(f);
+    stray.push(...out);
+    return pdfLines(inPage);
+  });
+
+  /* 1. Заголовок: главная линия (score ≥ 3) + соседние линии-этажи. */
+  let hp = -1, hi = -1;
+  outer:
+  for (let p = 0; p < pageLines.length; p++) {
+    for (let i = 0; i < pageLines[p].length; i++) {
+      let score = 0;
+      const seen = new Set();
+      for (const c of pageLines[p][i].cells) {
+        const f = detectField(c.str);
+        if (f && !seen.has(f)) { seen.add(f); score++; }
+      }
+      if (score >= 3) { hp = p; hi = i; break outer; }
+    }
+  }
+  if (hp < 0) return [];
+
+  /* Блок заголовка: главная линия + до 3 линий ниже, содержащих слова без чисел
+     или названия колонок (вторая языковая строка, «этажи» ячеек). */
+  const hLines = [pageLines[hp][hi]];
+  for (let i = hi + 1; i < Math.min(hi + 4, pageLines[hp].length); i++) {
+    const L = pageLines[hp][i];
+    const looksHeader = L.cells.some((c) => detectField(c.str)) ||
+      L.cells.every((c) => parseNum(c.str) === null && c.str.length < 40);
+    const hasAnchor = /^\d{1,4}$/.test(String(L.cells[0] && L.cells[0].str || "").trim());
+    if (looksHeader && !hasAnchor) hLines.push(L); else break;
+  }
+  const headerBottomY = hLines[hLines.length - 1].y;
+
+  /* 2. Колонки: кластеризация ячеек заголовочного блока по пересечению x. */
+  const hCells = hLines.flatMap((L) => L.cells.map((c) => ({ ...c, y: L.y })));
+  const colsArr = [];
+  for (const c of hCells.sort((a, b) => a.x - b.x)) {
+    const col = colsArr.find((k) => c.x < k.x1 + 3 && c.x + c.w > k.x0 - 3);
+    if (col) {
+      col.x0 = Math.min(col.x0, c.x);
+      col.x1 = Math.max(col.x1, c.x + c.w);
+      col.parts.push(c);
+    } else colsArr.push({ x0: c.x, x1: c.x + c.w, parts: [c] });
+  }
+  colsArr.sort((a, b) => a.x0 - b.x0);
+  let headerTexts = colsArr.map((k) =>
+    k.parts.sort((a, b) => b.y - a.y || a.x - b.x).map((p) => p.str).join(" "));
+
+  /* Узкие соседние колонки («Вес нетто | Вес брутто», «Цена | Стоимость»)
+     в PDF порой сливаются в одну ячейку — разрезаем такие пополам. */
+  const twinPairs = [
+    [/нетто|net\s*w(eigh)?t/i, /брутто|gross\s*w(eigh)?t/i, "netTotal", "gross"],
+    [/цена|price(?!s)/i, /стоимост|сумма|total\s*(price|value)|amount/i, "price", "total"],
+  ];
+  for (let i = colsArr.length - 1; i >= 0; i--) {
+    const t = headerTexts[i];
+    for (const [reA, reB] of twinPairs) {
+      const mA = reA.exec(t), mB = reB.exec(t);
+      if (mA && mB && mA.index !== mB.index) {
+        const first = mA.index < mB.index;
+        const { x0, x1 } = colsArr[i];
+        const mid = (x0 + x1) / 2;
+        const tA = t.slice(0, Math.max(mA.index, mB.index));
+        const tB = t.slice(Math.max(mA.index, mB.index));
+        colsArr.splice(i, 1,
+          { x0, x1: mid, parts: [] },
+          { x0: mid, x1, parts: [] });
+        headerTexts.splice(i, 1, first ? tA : tB, first ? tB : tA);
+        break;
+      }
+    }
+  }
+  const map = {};
+  headerTexts.forEach((t, i) => {
+    const f = detectField(t);
+    if (f && !(f in map)) map[f] = i;
+  });
+  if (Object.keys(map).length < 2) return [];
+
+  const bounds = [-Infinity];
+  for (let i = 1; i < colsArr.length; i++) bounds.push((colsArr[i - 1].x1 + colsArr[i].x0) / 2);
+  bounds.push(Infinity);
+  const colOf = (f) => {
+    const cx = f.x + f.w / 2;
+    for (let i = 0; i < colsArr.length; i++) if (cx >= bounds[i] && cx < bounds[i + 1]) return i;
+    return colsArr.length - 1;
+  };
+
+  /* 3. Постранично: якорные линии → записи; остальные линии — к ближайшему якорю. */
+  const records = [];
+  const placeVals = new Set();
+  for (let p = 0; p < pageLines.length; p++) {
+    const lines = pageLines[p];
+    const anchors = [];
+    const others = [];
+    for (let i = 0; i < lines.length; i++) {
+      const L = lines[i];
+      if (p === hp && i <= hi) continue;
+      let headerish = 0;
+      for (const c of L.cells) if (detectField(c.str)) headerish++;
+      if (headerish >= 2) continue;                      // повтор заголовка
+      if (p === hp && L.y >= headerBottomY && hLines.includes(L)) continue;
+      const first = String(L.cells[0] && L.cells[0].str || "").trim();
+      if (isTotalsRow(first)) continue;
+      const row = new Array(colsArr.length).fill("");
+      for (const f of L.frags) {
+        const i2 = colOf(f);
+        row[i2] = row[i2] ? row[i2] + " " + f.str : f.str;
+      }
+      const get = (fld) => (fld in map ? row[map[fld]] : "");
+      if (isTotalsRow(get("name"))) continue;
+      const isAnchor = /^\d{1,4}$/.test(first) && L.cells.length >= 2;
+      const dataCount = ["qty", "price", "total", "netTotal", "gross"]
+        .filter((fld) => fld in map && parseNum(cleanVal(get(fld))) !== null).length;
+      if (isAnchor || dataCount >= 2) anchors.push({ y: L.y, row });
+      else others.push(L);
+    }
+    if (!anchors.length) continue;
+    /* медианный шаг между якорями — лимит прилипания */
+    const steps = anchors.slice(1).map((a, i) => Math.abs(anchors[i].y - a.y)).sort((a, b) => a - b);
+    const pitch = steps.length ? steps[Math.floor(steps.length / 2)] : 24;
+    for (const L of others) {
+      let best = null, bd = Infinity;
+      for (const a of anchors) {
+        const d = Math.abs(a.y - L.y);
+        if (d < bd) { bd = d; best = a; }
+      }
+      /* линия-перенос: близко к якорю, есть текст в колонке наименования,
+         нет чисел в числовых колонках, не итоговая строка */
+      const numCols = new Set(["qty", "price", "total", "netTotal", "netUnit", "gross"]
+        .filter((fld) => fld in map).map((fld) => map[fld]));
+      const fullText = L.cells.map((c) => c.str).join(" ");
+      const isWrap =
+        !/^\s*(сумма|итого|всего|итог|total|grand)/i.test(fullText) &&
+        !L.frags.some((f) => numCols.has(colOf(f)) && parseNum(f.str) !== null) &&
+        ("name" in map && L.frags.some((f) => colOf(f) === map.name));
+      if (!best || bd > Math.max(pitch * 0.85, 12) || !isWrap) {
+        /* линия вне сетки строк: возможно, отметка грузового места */
+        if ("place" in map) {
+          for (const f of L.frags) if (colOf(f) === map.place) placeVals.add(f.str.trim());
+        }
+        continue;
+      }
+      const above = L.y > best.y; // перенос над якорем — текст идёт ПЕРЕД
+      for (const f of L.frags) {
+        const i2 = colOf(f);
+        best.row[i2] = best.row[i2]
+          ? (above ? f.str + " " + best.row[i2] : best.row[i2] + " " + f.str)
+          : f.str;
+      }
+    }
+    records.push(...anchors.map((a) => a.row));
+  }
+
+  /* Отметки мест из «блуждающих» фрагментов (в т.ч. за пределами страниц). */
+  if ("place" in map) {
+    for (const f of stray) if (colOf(f) === map.place && f.str.trim()) placeVals.add(f.str.trim());
+    for (const r of records) {
+      const v = cleanVal(r[map.place]);
+      if (v) placeVals.add(v);
+    }
+  }
+
+  const grid = [headerTexts, ...records];
+  const items = extractFromGrid(grid, fileName);
+
+  /* 4. Политика мест: печать Excel не сохраняет привязку объединённых ячеек
+     к строкам. Одно место на файл — присваиваем всем; несколько — не гадаем. */
+  const uniqPlaces = [...placeVals].filter(Boolean);
+  if (uniqPlaces.length === 1) {
+    for (const it of items) it.place = uniqPlaces[0];
+  } else if (uniqPlaces.length > 1) {
+    const covered = items.filter((it) => it.place).length;
+    if (covered < items.length) {
+      for (const it of items) { it.place = ""; it.gross = null; }
+      pdfWarnings.push(
+        `«${fileName}»: товары упакованы в ${uniqPlaces.length} грузовых места (${uniqPlaces.join(", ")}), ` +
+        `но PDF не сохраняет привязку строк к объединённым ячейкам мест — графы «№ места» и «брутто» оставлены пустыми. ` +
+        `Чтобы распределить брутто по местам, загрузите упаковочный лист в формате Excel.`);
+    }
+  }
+  return items;
 }
 
 async function readDocx(file) {
@@ -533,6 +738,7 @@ buildBtn.addEventListener("click", async () => {
   buildBtn.disabled = true;
   setStatus("Читаю документы…");
   state.notes = [];
+  pdfWarnings = [];
   try {
     const all = [];
     for (const f of state.files) {
@@ -545,6 +751,7 @@ buildBtn.addEventListener("click", async () => {
         state.notes.push(`Файл «${f.name}» не прочитан: ${err.message}`);
       }
     }
+    state.notes.push(...pdfWarnings);
     if (!all.length) {
       setStatus("Данные о товарах не найдены ни в одном файле.", true);
       buildBtn.disabled = false;
