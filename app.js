@@ -820,7 +820,12 @@ function renderResult() {
       `<td>${fmt(r.netTotal, 3)}</td>` +
       `<td>${fmt(r.gross, 3)}</td>` +
       `<td>${escapeHtml(r.places.join(", "))}</td>` +
-      `<td class="cell-comment">${escapeHtml(r.comment || "")}</td>`;
+      `<td class="cell-remark">${escapeHtml(r.comment || "")}</td>` +
+      `<td class="cell-tnved"></td>` +
+      `<td class="cell-manual"></td>` +
+      `<td class="cell-manual"></td>` +
+      `<td class="cell-manual"></td>` +
+      `<td class="cell-manual"></td>`;
     tbody.appendChild(tr);
     sums.qty += r.qty ?? 0; sums.total += r.total ?? 0;
     sums.net += r.netTotal ?? 0; sums.gross += r.gross ?? 0;
@@ -829,7 +834,16 @@ function renderResult() {
   tfoot.innerHTML =
     `<tr><td colspan="4">Итого</td>` +
     `<td>${fmt(sums.qty, 3)}</td><td></td><td>${fmt(round2(sums.total), 2)}</td><td></td>` +
-    `<td></td><td>${fmt(round3(sums.net), 3)}</td><td>${fmt(round3(sums.gross), 3)}</td><td></td><td></td></tr>`;
+    `<td></td><td>${fmt(round3(sums.net), 3)}</td><td>${fmt(round3(sums.gross), 3)}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
+
+  /* Предупреждения уровня файла (PDF-места, нечитаемые файлы) добавляем
+     в замечания первой строки таблицы, чтобы не терялись. */
+  if (state.notes.length && state.rows.length) {
+    const firstRow = state.rows[0];
+    const fileNotes = state.notes.join("; ");
+    firstRow.comment = firstRow.comment ? firstRow.comment + "; " + fileNotes : fileNotes;
+    firstRow.flagged = true;
+  }
 
   const notesEl = $("notes");
   notesEl.innerHTML = "";
@@ -837,14 +851,11 @@ function renderResult() {
   if (flaggedCount) {
     const p = document.createElement("p");
     p.className = "n-flag";
-    p.textContent = `Расхождения между документами найдены в ${flaggedCount} строк(ах) — они выделены жёлтым; подробности во всплывающей подсказке строки и в файле выгрузки.`;
+    p.textContent = `${flaggedCount} строк(а/и) выделены жёлтым — см. колонку «Замечания заполнителя».`;
     notesEl.appendChild(p);
   }
-  for (const n of state.notes) {
-    const p = document.createElement("p");
-    p.textContent = "• " + n;
-    notesEl.appendChild(p);
-  }
+  /* Ошибки чтения файлов (state.notes) теперь отражены в колонке замечаний,
+     отдельный блок под таблицей не нужен. */
   $("result-panel").hidden = false;
   $("result-panel").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -872,7 +883,12 @@ exportBtn.addEventListener("click", async () => {
     { header: "Общий вес нетто, кг",                key: "net",    width: 14 },
     { header: "Общий вес брутто, кг",               key: "gross",  width: 14 },
     { header: "№ грузового места",                  key: "place",  width: 14 },
-    { header: "Комментарии",                         key: "comment",width: 42 },
+    { header: "Замечания заполнителя",               key: "comment",width: 42 },
+    { header: "Код ТН ВЭД ЕАЭС",                    key: "tnved",  width: 14 },
+    { header: "Описание 31гр.",                      key: "desc31", width: 36 },
+    { header: "Список РД",                           key: "rd",     width: 20 },
+    { header: "Комментарии ОТНИС",                   key: "cotn",   width: 28 },
+    { header: "Вопросы ОТНИС",                       key: "qotn",   width: 28 },
   ];
 
   const head = ws.getRow(1);
@@ -895,6 +911,7 @@ exportBtn.addEventListener("click", async () => {
       gross: r.gross ?? "",
       place: r.places.join(", "),
       comment: r.comment || "",
+      tnved: "", desc31: "", rd: "", cotn: "", qotn: "",
     });
     row.getCell("price").numFmt = "#,##0.00";
     row.getCell("total").numFmt = "#,##0.00";
