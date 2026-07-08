@@ -81,6 +81,21 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 const round2 = (n) => Math.round(n * 100) / 100;
 const normKey = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 const isTotalsRow = (s) => /^\s*(итого|всего|итог|grand\s*total|total|sum)([\s:.,]|$)/i.test(String(s || ""));
+
+/* Строки, которые не являются товарными, — стоп-блоки документа.
+   Встретив их в позиции «наименование» или «артикул», пропускаем строку. */
+const isJunkRow = (cells) => {
+  const full = cells.filter(Boolean).map((v) => String(v).trim()).join(" ");
+  return /(^|\s)(p\.no|dimensions?|gross\s*weight|net\s*weight|bank\s*name|beneficiary|inn\s*no|bic\s*no|account\s*no|kpp|cor\.?\s*account|buyer\s*company|seller\s*company|stamp\s*&\s*sign|authorize)($|\s)/i.test(full) ||
+    /^date\s*:?$/i.test(full.trim()) || /^date\s*:?\s+date\s*:?$/i.test(full.trim()) ||
+    /^\d+[*x×]\d+[*x×]\d+$/.test(full.trim());   // габариты вида 75*75*40
+};
+
+/* Блок в документе, после которого товары точно кончились (реквизиты, подписи). */
+const isDocTrailerStart = (cells) => {
+  const full = cells.filter(Boolean).map((v) => String(v).trim()).join(" ").toLowerCase();
+  return /gross\s*weight|net\s*weight|bank\s*name|beneficiary|buyer.*stamp|seller.*stamp|dimensions?/.test(full);
+};
 /* Заглушки вида «--», «—», «n/a» считаем пустым значением. */
 const cleanVal = (v) => {
   const s = String(v ?? "").trim();
@@ -203,6 +218,9 @@ function extractFromGrid(rows, fileName) {
     const article = cleanVal(get("article")).replace(/\s+/g, " ");
     if (!name && !article) continue;
     if (isTotalsRow(name) || isTotalsRow(row[0]) || isTotalsRow(get("article"))) continue;
+    if (isJunkRow(row)) continue;
+    /* Как только встречаем маркер хвоста документа — прекращаем чтение */
+    if (isDocTrailerStart(row)) break;
     /* Отсеиваем строки нумерации граф («1», «1а», «2а»…) и прочий мусор:
        в наименовании должно быть хотя бы 3 буквы подряд, либо внятный артикул. */
     if (!hasLetters(name) && !/[A-Za-zА-Яа-я0-9]{4,}/.test(article)) continue;
@@ -429,6 +447,8 @@ function extractFromPdfPages(pages, fileName) {
       if (p === hp && L.y >= headerBottomY && hLines.includes(L)) continue;
       const first = String(L.cells[0] && L.cells[0].str || "").trim();
       if (isTotalsRow(first)) continue;
+      if (isJunkRow(L.cells.map((c) => c.str))) continue;
+      if (isDocTrailerStart(L.cells.map((c) => c.str))) break;
       const row = new Array(colsArr.length).fill("");
       for (const f of L.frags) {
         const i2 = colOf(f);
