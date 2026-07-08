@@ -665,6 +665,7 @@ function mergeItems(allItems) {
     const codes = unitCodes(unitRaw);
 
     rows.push({
+      _parts: parts,
       name: pick((p) => p.name) || "",
       article: pick((p) => p.article) || "",
       unitRaw, unitNum: codes.num, unitLet: codes.let,
@@ -676,7 +677,31 @@ function mergeItems(allItems) {
       places,
       flagged: discrepancies.length > 0,
       discrepancies,
+      comment: "",     // заполняется ниже
+      absent: [],      // список файлов, в которых товар отсутствует
     });
+  }
+  /* Если загружено > 1 файла, проставляем absent для каждой строки:
+     список файлов, в которых данный товар вообще не встречается. */
+  const allSources = [...perFile.keys()];
+  if (allSources.length > 1) {
+    for (const row of rows) {
+      const rowSources = new Set(row._parts ? row._parts.map((p) => p.source) : []);
+      row.absent = allSources.filter((s) => !rowSources.has(s));
+      if (row.absent.length) {
+        row.flagged = true;
+        row.comment = "Отсутствует в файле: " + row.absent.join(", ");
+      }
+      if (row.discrepancies.length) {
+        row.comment = row.comment
+          ? row.comment + "; " + row.discrepancies.join("; ")
+          : row.discrepancies.join("; ");
+      }
+    }
+  } else {
+    for (const row of rows) {
+      if (row.discrepancies.length) row.comment = row.discrepancies.join("; ");
+    }
   }
   return rows;
 }
@@ -794,7 +819,8 @@ function renderResult() {
       `<td>${fmt(r.netUnit, 3)}</td>` +
       `<td>${fmt(r.netTotal, 3)}</td>` +
       `<td>${fmt(r.gross, 3)}</td>` +
-      `<td>${escapeHtml(r.places.join(", "))}</td>`;
+      `<td>${escapeHtml(r.places.join(", "))}</td>` +
+      `<td class="cell-comment">${escapeHtml(r.comment || "")}</td>`;
     tbody.appendChild(tr);
     sums.qty += r.qty ?? 0; sums.total += r.total ?? 0;
     sums.net += r.netTotal ?? 0; sums.gross += r.gross ?? 0;
@@ -803,7 +829,7 @@ function renderResult() {
   tfoot.innerHTML =
     `<tr><td colspan="4">Итого</td>` +
     `<td>${fmt(sums.qty, 3)}</td><td></td><td>${fmt(round2(sums.total), 2)}</td><td></td>` +
-    `<td></td><td>${fmt(round3(sums.net), 3)}</td><td>${fmt(round3(sums.gross), 3)}</td><td></td></tr>`;
+    `<td></td><td>${fmt(round3(sums.net), 3)}</td><td>${fmt(round3(sums.gross), 3)}</td><td></td><td></td></tr>`;
 
   const notesEl = $("notes");
   notesEl.innerHTML = "";
@@ -846,6 +872,7 @@ exportBtn.addEventListener("click", async () => {
     { header: "Общий вес нетто, кг",                key: "net",    width: 14 },
     { header: "Общий вес брутто, кг",               key: "gross",  width: 14 },
     { header: "№ грузового места",                  key: "place",  width: 14 },
+    { header: "Комментарии",                         key: "comment",width: 42 },
   ];
 
   const head = ws.getRow(1);
@@ -867,6 +894,7 @@ exportBtn.addEventListener("click", async () => {
       net: r.netTotal ?? "",
       gross: r.gross ?? "",
       place: r.places.join(", "),
+      comment: r.comment || "",
     });
     row.getCell("price").numFmt = "#,##0.00";
     row.getCell("total").numFmt = "#,##0.00";
@@ -877,8 +905,10 @@ exportBtn.addEventListener("click", async () => {
       row.eachCell({ includeEmpty: true }, (cell) => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
       });
-      const noteCell = row.getCell("name");
-      noteCell.note = "Расхождение между документами:\n" + r.discrepancies.join("\n");
+      if (r.comment) {
+        const noteCell = row.getCell("name");
+        noteCell.note = r.comment;
+      }
     }
   });
 

@@ -141,6 +141,7 @@ th{
 }
 td.cell-name,th.col-name{text-align:left;white-space:normal;min-width:220px;font-family:"IBM Plex Sans",sans-serif}
 td.cell-art{text-align:left}
+td.cell-comment,th.col-comment{text-align:left;white-space:normal;min-width:180px;font-family:"IBM Plex Sans",sans-serif;font-size:.75rem;color:var(--mark-ink)}
 tr.is-flagged td{background:var(--mark)}
 tr.is-flagged td:first-child{box-shadow:inset 3px 0 0 #D9C43C}
 tfoot td{font-weight:600;background:var(--paper)}
