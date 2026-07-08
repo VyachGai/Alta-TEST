@@ -86,15 +86,21 @@ const isTotalsRow = (s) => /^\s*(итого|всего|итог|grand\s*total|to
    Встретив их в позиции «наименование» или «артикул», пропускаем строку. */
 const isJunkRow = (cells) => {
   const full = cells.filter(Boolean).map((v) => String(v).trim()).join(" ");
-  return /(^|\s)(p\.no|dimensions?|gross\s*weight|net\s*weight|bank\s*name|beneficiary|inn\s*no|bic\s*no|account\s*no|kpp|cor\.?\s*account|buyer\s*company|seller\s*company|stamp\s*&\s*sign|authorize)($|\s)/i.test(full) ||
-    /^date\s*:?$/i.test(full.trim()) || /^date\s*:?\s+date\s*:?$/i.test(full.trim()) ||
-    /^\d+[*x×]\d+[*x×]\d+$/.test(full.trim());   // габариты вида 75*75*40
+  const fullL = full.toLowerCase();
+  /* Явные нетоварные маркеры в тексте строки */
+  if (/(^|\s)(p\.no|dimensions?|gross\s*weight|net\s*weight|bank\s*name|beneficiary|inn\s*no|bic\s*no|account\s*no|kpp|cor\.?\s*account|buyer\s*company|seller\s*company|stamp\s*&\s*sign|authorize)($|\s)/i.test(full)) return true;
+  if (/^date\s*:?$/i.test(full.trim()) || /^date\s*:?\s+date\s*:?$/i.test(full.trim())) return true;
+  /* Строка содержит габариты AxBxC (возможно с номером паллета перед ними) */
+  if (/\d+[*x×]\d+[*x×]\d+/.test(full)) return true;
+  /* Строка — только числа и знак × (итоговая/счётная строка без наименования) */
+  if (/^\d[\d\s,.*x×]*$/.test(full.trim()) && !/[A-Za-zА-Яа-яЁё]/.test(full)) return true;
+  return false;
 };
 
 /* Блок в документе, после которого товары точно кончились (реквизиты, подписи). */
 const isDocTrailerStart = (cells) => {
   const full = cells.filter(Boolean).map((v) => String(v).trim()).join(" ").toLowerCase();
-  return /gross\s*weight|net\s*weight|bank\s*name|beneficiary|buyer.*stamp|seller.*stamp|dimensions?/.test(full);
+  return /gross\s*weight|net\s*weight|bank\s*name|beneficiary|buyer.*stamp|seller.*stamp|p\.no\s+dimensions?|dimensions?\s+p\.no/.test(full);
 };
 /* Заглушки вида «--», «—», «n/a» считаем пустым значением. */
 const cleanVal = (v) => {
