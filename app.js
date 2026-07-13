@@ -282,7 +282,11 @@ function detectField(headerText) {
 function parseNum(v) {
   if (v === null || v === undefined || v === "") return null;
   if (typeof v === "number") return isFinite(v) ? v : null;
-  let s = String(v).replace(/[\s\u00A0\u202F]/g, "").replace(/[₽$€¥£]|usd|eur|rub|cny|руб\.?/gi, "");
+  let s = String(v).replace(/[\s\u00A0\u202F]/g, "");
+  /* Убираем символы валют (включая менее распространённые) и трёхбуквенные коды валют,
+     а также вертикальную черту — в некоторых PDF граница ячейки таблицы
+     попадает в текстовый слой как символ "|" рядом с числом или вместо "€". */
+  s = s.replace(/[₽$€¥£₴₹₩₺¤]|[|¦]|usd|eur|rub|cny|jpy|gbp|kzt|byn|uah|try|aed|руб\.?/gi, "");
   if (!s) return null;
   if (s.includes(".") && s.includes(",")) {
     // европейский формат 1.234,56
@@ -473,6 +477,19 @@ function extractFromGrid(rows, fileName) {
     /* Постобработка colMap: устраняем неоднозначности */
   if (colMap && colMapAll) {
     const hRow = rows[headerIdx];
+    /* Fallback: заголовок колонки количества может быть искажён при
+       извлечении текста из PDF (нечитаемые символы вместо «QTY») и не
+       совпасть ни с одним известным паттерном. Если между колонками
+       «наименование» и «цена» есть ровно одна незанятая колонка —
+       считаем её количеством. */
+    if (!("qty" in colMap) && "name" in colMap && "price" in colMap) {
+      const occupied = new Set(Object.values(colMap));
+      const between = [];
+      for (let c = colMap.name + 1; c < colMap.price; c++) {
+        if (!occupied.has(c)) between.push(c);
+      }
+      if (between.length === 1) colMap.qty = between[0];
+    }
     /* Все колонки с полем "name" */
     const allNameCols = colMapAll["name"] || [];
     if (allNameCols.length > 1) {
@@ -808,8 +825,13 @@ function extractFromPdfPages(pages, fileName) {
   const headerBottomY = hLines[hLines.length - 1].y;
 
   /* 2. Колонки: кластеризация ячеек заголовочного блока по пересечению x. */
-  /* Строка перед заголовком (напр. "QTY" над "ITEM") → в колоночную сетку */
-  const hPrv = hi > 0 ? pageLines[hp][hi - 1] : null;
+  /* Строка перед заголовком (напр. "QTY" над "ITEM") → в колоночную сетку.
+     Включаем её только если она физически БЛИЗКО к заголовку (обычный
+     межстрочный интервал) — иначе это может быть случайный текст выше
+     (адрес компании, дата и т.п.), который испортит границы колонок. */
+  const headerY = pageLines[hp][hi].y;
+  const hPrv = (hi > 0 && Math.abs(pageLines[hp][hi - 1].y - headerY) < 20)
+    ? pageLines[hp][hi - 1] : null;
   const hPrvC = hPrv ? hPrv.cells.map((c) => ({ ...c, y: hPrv.y })) : [];
   const hCells = [...hPrvC, ...hLines.flatMap((L) => L.cells.map((c) => ({ ...c, y: L.y })))];
   const colsArr = [];
@@ -854,6 +876,17 @@ function extractFromPdfPages(pages, fileName) {
     const f = detectField(t);
     if (f && !(f in map)) map[f] = i;
   });
+  /* Fallback: заголовок колонки количества иногда искажается при извлечении
+     текста из PDF (нечитаемые символы вместо «QTY»/«Кол-во») и не совпадает
+     ни с одним известным паттерном. Если между колонками «наименование»
+     и «цена» есть ровно одна незанятая колонка — считаем её количеством. */
+  if (!("qty" in map) && "name" in map && "price" in map) {
+    const between = [];
+    for (let c = map.name + 1; c < map.price; c++) {
+      if (!Object.values(map).includes(c)) between.push(c);
+    }
+    if (between.length === 1) map.qty = between[0];
+  }
   if (Object.keys(map).length < 2) return [];
 
   const bounds = [-Infinity];
@@ -865,8 +898,12 @@ function extractFromPdfPages(pages, fileName) {
        широкий (заголовок широкой текстовой колонки часто стоит по центру,
        далеко от начала данных) — граница midpoint окажется слишком далеко
        вправо, и короткие строки данных широкой колонки попадут в узкую
-       предыдущую. Ставим границу ближе к концу узкой колонки. */
-    if (prevWidth < 30 && gap > 60) bounds.push(prev.x1 + Math.min(gap * 0.25, 20));
+       предыдущую. Ставим границу ближе к концу узкой колонки.
+       Применяем только к ПЕРВОЙ границе (i===1): именно там обычно стоит
+       порядковый номер — гарантированно узкая колонка. Для остальных
+       колонок короткое слово-заголовок (например «ITEM») не означает,
+       что сама колонка данных узкая — там это правило было бы ошибкой. */
+    if (i === 1 && prevWidth < 30 && gap > 60) bounds.push(prev.x1 + Math.min(gap * 0.25, 20));
     else bounds.push((prev.x1 + cur.x0) / 2);
   }
   bounds.push(Infinity);
@@ -900,11 +937,36 @@ function extractFromPdfPages(pages, fileName) {
         row[i2] = row[i2] ? row[i2] + " " + f.str : f.str;
       }
       const get = (fld) => (fld in map ? row[map[fld]] : "");
+      /* Иногда граница ячейки таблицы (вертикальная линия) попадает в текст
+         и «склеивает» соседние значения в одну ячейку, например
+         «18 | €51,67» (количество и цена) или «6 — 50-1100» (количество
+         и артикул в документах без цены). Разносим их по местам. */
+      if ("qty" in map) {
+        const qtyRaw = String(row[map.qty] || "").trim();
+        if (!qtyRaw && "price" in map) {
+          const priceRaw = String(row[map.price] || "").trim();
+          const m1 = priceRaw.match(/^(\d{1,4})\s*[|¦]?\s*([€$¥£₽].+)$/);
+          if (m1) { row[map.qty] = m1[1]; row[map.price] = m1[2]; }
+        }
+        if (!String(row[map.qty] || "").trim() && "article" in map) {
+          const artRaw = String(row[map.article] || "").trim();
+          const m2 = artRaw.match(/^(\d{1,4})\s*[—–\-|¦]\s*(\S.+)$/);
+          if (m2) { row[map.qty] = m2[1]; row[map.article] = m2[2]; }
+        }
+      }
       if (isTotalsRow(get("name"))) continue;
       const isAnchor = /^\d{1,4}$/.test(first) && L.cells.length >= 2;
       const dataCount = ["qty", "price", "total", "netTotal", "gross"]
         .filter((fld) => fld in map && parseNum(cleanVal(get(fld))) !== null).length;
-      if (isAnchor || dataCount >= 2) anchors.push({ y: L.y, row });
+      /* Документы без цены (например упаковочные листы) могут иметь всего
+         одно числовое поле (qty). Если вдобавок есть непустой артикул или
+         наименование — это полноценная товарная строка, даже если серийный
+         номер искажён при извлечении текста (напр. OCR принял «11» за «"»). */
+      const hasQty = "qty" in map && parseNum(cleanVal(get("qty"))) !== null;
+      const hasArticleOrName =
+        ("article" in map && hasLetters(cleanVal(get("article")))) ||
+        ("name" in map && hasLetters(cleanVal(get("name"))));
+      if (isAnchor || dataCount >= 2 || (hasQty && hasArticleOrName)) anchors.push({ y: L.y, row });
       else others.push(L);
     }
     if (!anchors.length) continue;
@@ -1124,10 +1186,15 @@ function mergeItems(allItems) {
              он ДОЛЖЕН совпадать — иначе это разные товары со схожим названием
              (например «Connector male stud» и «Connector male stud - GE-10LRED-1/8»). */
           const qtyB = partsB.reduce((s, p) => (p.qty !== null ? s + p.qty : s), 0) || null;
-          if (qtyA !== null && qtyB !== null && qtyA !== qtyB) continue;
           const nameB = stripNoise(normKey(partsB[0].name));
           const sim = nameSimilarity(nameA, nameB);
-          if (sim >= FUZZY_THRESHOLD) candidates.push({ i, j, sim });
+          /* При почти полном текстовом совпадении (после очистки суффикса)
+             доверяем именам даже при разном qty — это, как правило,
+             означает ошибку OCR в цифрах одного из источников, а не то,
+             что это разные товары. Иначе (просто похожие названия)
+             расхождение qty — сигнал, что это разные товары. */
+          const qtyOk = qtyA === null || qtyB === null || qtyA === qtyB || sim >= 0.97;
+          if (qtyOk && sim >= FUZZY_THRESHOLD) candidates.push({ i, j, sim });
         }
       }
       candidates.sort((a, b) => b.sim - a.sim);
