@@ -1238,7 +1238,25 @@ buildBtn.addEventListener("click", async () => {
     }
     state.notes.push(...pdfWarnings);
     if (!all.length) {
-      setStatus("Данные о товарах не найдены ни в одном файле.", true);
+      /* Если есть notes (например, сообщение о скане) — показываем их, а не стандартную ошибку */
+      if (state.notes.length) {
+        /* Выводим первое примечание в строку статуса */
+        setStatus(state.notes[0], true);
+        /* Остальные примечания показываем в блоке под кнопками */
+        const notesEl = $("notes");
+        if (notesEl) {
+          notesEl.innerHTML = "";
+          for (const n of state.notes) {
+            const p = document.createElement("p");
+            p.style.cssText = "color:#A33B2E;font-size:.85rem;margin:8px 0;line-height:1.5";
+            p.textContent = "⚠ " + n;
+            notesEl.appendChild(p);
+          }
+          $("result-panel").hidden = false;
+        }
+      } else {
+        setStatus("Данные о товарах не найдены ни в одном файле.", true);
+      }
       buildBtn.disabled = false;
       return;
     }
