@@ -249,8 +249,8 @@ const FIELD_PATTERNS = [
   ["serial",   /^(item\s*(no\.?|№|number|#)|#|№|no\.?|поз\.?|п\/п)$/i],
   /* Нетто за единицу — обязательно ДО netTotal */
   ["netUnit",  /нетто[^а-яa-z]*(ед|за\s*ед|единиц)|вес\s*ед[^а-яa-z]*нетто|n\.w\.?\s*\/\s*pc|net\s*weight\s*(per\s*)?(unit|pcs?|each)|unit\s*net\s*weight/i],
-  ["netTotal", /total\s*n\.?w|нетто|net\s*w(eigh)?t(?!\s*(per|by|each|\/\s*pc))|\btotal\s+net\b/i],
-  ["gross",    /total\s*g\.?w|брутто|gross\s*w(eigh)?t|\btotal\s+gross\b|g\.?w\.?\s*\/\s*ctn/i],
+  ["netTotal", /total\s*n\.?w|нетто|net\s*w(eigh)?t(?!\s*(per|by|each|\/\s*pc))|\btotal\s+net\b|\bn\.\s*w\.?(?![a-z])/i],
+  ["gross",    /total\s*g\.?w|брутто|gross\s*w(eigh)?t|\btotal\s+gross\b|g\.?w\.?\s*\/\s*ctn|\bg\.\s*w\.?(?![a-z])/i],
   ["price",    /цена|price(?!\s*list)|стоимость\s*(за\s*)?ед|rate(?!d)/i],
   ["total",    /стоимост|сумма(?!\s*нал)|amount(?!\s*of)|total\s*(usd|eur|rub|price|value|cost)|итого\s*стоим/i],
   ["qty",      /кол-?\s?во|количеств|\btotal\s+(qty|quantity)\b|qty\/?(\s*pcs?|total|box|ctn)?|\bquantity\b|кол\.(?!\s*ед)/i],
@@ -266,7 +266,7 @@ const FIELD_PATTERNS = [
   ["model",    /модель|model(?!\s*(no|#|code))/i],
   ["maker",    /изготовитель|производитель|manufacturer|made\s*by/i],
   ["country",  /страна\s*(происхождения|изготовлен|origin)?|coo(?!\s*[a-z])|country\s*(of\s*)?(origin|manufacture)?|origin(?!\s*price)/i],
-  ["place",    /груз\w*\s*мест|мест[оа]\s*№?|№\s*мест|place|package\s*(no|№|number)?|box\s*(no\.?|№|number)?|carton|кор(об|обк)\w*|паллет|pallet|case\s*(no|№)/i],
+  ["place",    /груз\w*\s*мест|мест[оа]\s*№?|№\s*мест|place|package\s*(no|№|number)|box\s*(no\.?|№|number)|carton\s*(no|№)?|кор(об|обк)\w*|паллет|pallet|case\s*(no|№)/i],
   /* Наименование — в ПОСЛЕДНЮЮ очередь */
   ["name",     /наименован|назван|описан|товар|description|goods|^name$|^item$|product(?!\s*(code|no\.?|#|id))|^product$|commodity/i],
 ];
@@ -300,7 +300,19 @@ function parseNum(v) {
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const round2 = (n) => Math.round(n * 100) / 100;
 const normKey = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
-const isTotalsRow = (s) => /^\s*(итого|всего|итог|grand\s*total|total|sum)([\s:.,]|$)/i.test(String(s || ""));
+const isTotalsRow = (s) => {
+  const str = String(s || "").trim();
+  if (/^\s*(итого|всего|итог|grand\s*total|total|sum)([\s:.,]|$)/i.test(str)) return true;
+  /* Итоговая метка часто оформлена как «Родное название /Total» или
+     «合计/Total» — слово total/итого стоит сразу после разделителя
+     (слэш, двоеточие), независимо от того, что было до или идёт после
+     («Общая сумма FCA Манчжурия /Total FCA Manzhouli»). */
+  if (/[\/：:]\s*(итого|всего|итог|total)\b/i.test(str)) return true;
+  /* То же самое, но слово стоит в самом конце строки без разделителя
+     («Total USD :», «Всего к оплате»). */
+  if (/\b(итого|всего|итог|total|sum)[\s:.：、]*$/i.test(str)) return true;
+  return false;
+};
 
 /* Строки, которые не являются товарными, — стоп-блоки документа.
    Встретив их в позиции «наименование» или «артикул», пропускаем строку. */
@@ -490,6 +502,31 @@ function extractFromGrid(rows, fileName) {
       }
       if (between.length === 1) colMap.qty = between[0];
     }
+    /* Fallback: заголовок колонки наименования (и/или артикула) может быть
+       на нераспознанном языке (например китайские иероглифы без перевода)
+       и не совпасть ни с одним известным паттерном. Если между «serial»
+       и «qty» есть 1–2 незанятые колонки — считаем первую наименованием,
+       вторую (если есть) — артикулом. */
+    if (!("name" in colMap) && !("serial" in colMap) && "qty" in colMap && colMap.qty > 0) {
+      /* Ни serial, ни name не распознаны текстово — по общепринятой практике
+         самая первая колонка таблицы почти всегда порядковый номер. */
+      if (!Object.values(colMap).includes(0)) colMap.serial = 0;
+    }
+    if (!("name" in colMap) && "serial" in colMap && "qty" in colMap) {
+      const occupied = new Set(Object.values(colMap));
+      const between = [];
+      for (let c = colMap.serial + 1; c < colMap.qty; c++) {
+        if (!occupied.has(c)) between.push(c);
+      }
+      if (between.length === 1) colMap.name = between[0];
+      else if (between.length >= 2) {
+        colMap.name = between[0];
+        /* Если незанятых колонок несколько (например дубль наименования
+           на двух языках) — артикул/номер детали обычно стоит ПОСЛЕДНИМ
+           перед qty, а не сразу после наименования. */
+        if (!("article" in colMap)) colMap.article = between[between.length - 1];
+      }
+    }
     /* Все колонки с полем "name" */
     const allNameCols = colMapAll["name"] || [];
     if (allNameCols.length > 1) {
@@ -544,13 +581,34 @@ function extractFromGrid(rows, fileName) {
 
   const items = [];
   let lastPlace = "";
+  let lastName = "", lastArticle = "";
   for (let r = headerIdx + 1; r < rows.length; r++) {
     const row = rows[r];
     const get = (f) => (f in colMap ? row[colMap[f]] : "");
-    const name = cleanVal(get("name")).replace(/\s+/g, " ");
-    const article = cleanVal(get("article")).replace(/\s+/g, " ");
-    if (!name && !article) continue;
-    if (isTotalsRow(name) || isTotalsRow(row[0]) || isTotalsRow(get("article"))) continue;
+    let name = cleanVal(get("name")).replace(/\s+/g, " ");
+    let article = cleanVal(get("article")).replace(/\s+/g, " ");
+    /* Итоговую строку («Итого», «合计/Total» и т.п.) отсекаем СРАЗУ, на сырых
+       данных — до того как решать про наследование названия от предыдущей
+       товарной строки (иначе итог может ошибочно «унаследовать» товар). */
+    if (isTotalsRow(name) || isTotalsRow(row[0]) || isTotalsRow(article)) continue;
+    if (!name && !article) {
+      /* Товар может быть физически разбит на несколько грузовых мест —
+         строка-продолжение содержит только вес/место, без наименования.
+         Если в строке есть значимые числовые данные и уже была товарная
+         строка выше — наследуем от неё название и артикул.
+         НО: сначала проверяем ВСЮ строку (все ячейки, не только колонки
+         name/article/serial) на признак итога документа — иначе строка
+         вида «Всего к оплате 187544,20» может ошибочно «унаследовать»
+         название последнего товара. */
+      const rowLooksLikeTotal = row.some((cell) => isTotalsRow(cell));
+      const hasNumericData = !rowLooksLikeTotal && ["qty", "netTotal", "gross", "netUnit", "price", "total"]
+        .some((f) => f in colMap && parseNum(cleanVal(get(f))) !== null);
+      if (hasNumericData && (lastName || lastArticle)) {
+        name = lastName; article = lastArticle;
+      } else {
+        continue;
+      }
+    }
     if (isJunkRow(row)) continue;
     /* Как только встречаем маркер хвоста документа — прекращаем чтение */
     if (isDocTrailerStart(row)) break;
@@ -565,6 +623,9 @@ function extractFromGrid(rows, fileName) {
       if (v && detectField(v)) headerish++;
     }
     if (headerish >= 2) continue;
+    /* Запоминаем последнее «настоящее» наименование/артикул для наследования
+       следующими строками-продолжениями (если это не унаследованная строка) */
+    if (cleanVal(get("name")) || cleanVal(get("article"))) { lastName = name; lastArticle = article; }
 
     let place = cleanVal(get("place"));
     if ("place" in colMap) {
