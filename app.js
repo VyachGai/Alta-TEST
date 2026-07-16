@@ -1699,6 +1699,34 @@ function mergeItems(allItems) {
       for (const p of parts) { const v = sel(p); if (v !== null && v !== "" && v !== undefined) return v; }
       return null;
     };
+    /* Для идентифицирующих полей (артикул, марка, модель, изготовитель,
+       страна) разные файлы иногда расходятся (например, счёт-фактура даёт
+       свой код на другом языке вместо внутреннего артикула из спецификации).
+       Берём значение, подтверждённое БОЛЬШИНСТВОМ файлов, а не просто первое
+       непустое — иначе результат случайно зависит от порядка слияния групп,
+       а не от того, какой источник надёжнее. При отсутствии большинства
+       (все значения из одного файла или ничья) поведение как у pick(). */
+    const pickConsensus = (sel) => {
+      const bySrc = new Map(); // source → первое непустое значение этого файла
+      for (const p of parts) {
+        if (bySrc.has(p.source)) continue;
+        const v = sel(p);
+        if (v !== null && v !== "" && v !== undefined) bySrc.set(p.source, v);
+      }
+      if (bySrc.size === 0) return null;
+      const counts = new Map(); // normKey(v) → { v, votes, order }
+      let order = 0;
+      for (const v of bySrc.values()) {
+        const k = normKey(v);
+        if (!counts.has(k)) counts.set(k, { v, votes: 0, order: order++ });
+        counts.get(k).votes++;
+      }
+      let best = null;
+      for (const c of counts.values()) {
+        if (!best || c.votes > best.votes || (c.votes === best.votes && c.order < best.order)) best = c;
+      }
+      return best.v;
+    };
     const filesWithQty   = [...byFile.values()].filter((a) => a.qty   !== null);
     const filesWithTotal = [...byFile.values()].filter((a) => a.total !== null);
     const filesWithNet   = [...byFile.values()].filter((a) => a.net   !== null);
@@ -1739,10 +1767,10 @@ function mergeItems(allItems) {
     rows.push({
       _parts: parts,
       name:      pick((p) => p.name) || "",
-      article:   pick((p) => p.article) || "",
-      brand:     pick((p) => p.brand)   || "",
-      model:     pick((p) => p.model)   || "",
-      maker:     pick((p) => p.maker)   || "",
+      article:   pickConsensus((p) => p.article) || "",
+      brand:     pickConsensus((p) => p.brand)   || "",
+      model:     pickConsensus((p) => p.model)   || "",
+      maker:     pickConsensus((p) => p.maker)   || "",
       country:   pick((p) => p.country) || "",
       countryA2: pick((p) => p.countryA2) || "",
       countryNum:pick((p) => p.countryNum) || "",
