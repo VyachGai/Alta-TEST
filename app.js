@@ -1584,6 +1584,21 @@ function mergeItems(allItems) {
        в одном документе и отсутствовать в другом — убираем перед сравнением. */
     const stripNoise = (s) => s.replace(/\s*\btrebu\b\s*$/i, "").trim();
 
+    /* Проверка: артикул одной группы явно встречается (на границе слова)
+       в наименовании другой. Типичный случай: один документ хранит код
+       изделия производителя отдельным полем «Артикул», другой — только
+       внутри составного наименования вида «КОД_Описание» (иногда ещё и в
+       двух языках через «/»), а для собственного артикула использует
+       другой, внутренний (складской) номер. Такое совпадение надёжнее
+       текстового сравнения наименований целиком, которые из-за добавленного
+       перевода могут отличаться слишком сильно для порога nameSimilarity. */
+    const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const articleEmbeddedInName = (article, name) => {
+      if (!article || article.length < 6 || !name) return false;
+      const re = new RegExp("(^|[^a-z0-9а-яё])" + escapeRe(article) + "([^a-z0-9а-яё]|$)");
+      return re.test(name);
+    };
+
     const allSources = new Set(allItems.map((it) => it.source));
     if (allSources.size > 1) {
       const groupKeys = [...byGoods.keys()];
@@ -1645,13 +1660,17 @@ function mergeItems(allItems) {
              (например «Connector male stud» и «Connector male stud - GE-10LRED-1/8»). */
           const qtyB = partsB.reduce((s, p) => (p.qty !== null ? s + p.qty : s), 0) || null;
           const nameB = stripNoise(normKey(partsB[0].name));
-          const sim = nameSimilarity(nameA, nameB);
-          /* При почти полном текстовом совпадении (после очистки суффикса)
-             доверяем именам даже при разном qty — это, как правило,
-             означает ошибку OCR в цифрах одного из источников, а не то,
-             что это разные товары. Иначе (просто похожие названия)
-             расхождение qty — сигнал, что это разные товары. */
-          const qtyOk = qtyA === null || qtyB === null || qtyA === qtyB || sim >= 0.97;
+          const artA = normKey(partsA[0].article);
+          const artB = normKey(partsB[0].article);
+          const embedded = articleEmbeddedInName(artA, nameB) || articleEmbeddedInName(artB, nameA);
+          const sim = embedded ? 1 : nameSimilarity(nameA, nameB);
+          /* При почти полном текстовом совпадении (после очистки суффикса),
+             при найденном артикуле внутри чужого наименования, доверяем
+             именам даже при разном qty — это, как правило, означает ошибку
+             OCR в цифрах одного из источников, а не то, что это разные
+             товары. Иначе (просто похожие названия) расхождение qty —
+             сигнал, что это разные товары. */
+          const qtyOk = embedded || qtyA === null || qtyB === null || qtyA === qtyB || sim >= 0.97;
           if (qtyOk && sim >= FUZZY_THRESHOLD) candidates.push({ i, j, sim });
         }
       }
