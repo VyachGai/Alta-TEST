@@ -11,6 +11,23 @@
 </head>
 <body>
 
+<nav class="tabs" role="tablist" aria-label="Разделы приложения">
+  <button class="tab" id="tab-btn-tablica" role="tab"
+          aria-selected="true" aria-controls="tab-tablica" data-tab="tab-tablica">
+    <span class="tab__num">01</span>
+    Таблица товаров
+  </button>
+  <button class="tab" id="tab-btn-proverka" role="tab"
+          aria-selected="false" aria-controls="tab-proverka" data-tab="tab-proverka">
+    <span class="tab__num">02</span>
+    Проверка ограничений 311 · 312 · 313
+  </button>
+</nav>
+
+<!-- ══════════ БЛОК 1: сборка таблицы товаров ══════════ -->
+<div class="tab-panel is-active" id="tab-tablica" role="tabpanel"
+     aria-labelledby="tab-btn-tablica">
+
 <header class="form-head">
   <div class="form-head__stamp" aria-hidden="true">
     <span>ДЕКЛАРАНТ</span>
@@ -117,11 +134,116 @@
   <span>Повторяющиеся товары объединяются в одну строку. Незаполненные графы остаются пустыми.</span>
 </footer>
 
+</div>
+<!-- ══════════ КОНЕЦ БЛОКА 1 ══════════ -->
+
+
+<!-- ══════════ БЛОК 2: проверка ограничений ══════════ -->
+<div class="tab-panel" id="tab-proverka" role="tabpanel"
+     aria-labelledby="tab-btn-proverka" hidden>
+
+<header class="form-head">
+  <div class="form-head__stamp form-head__stamp--alt" aria-hidden="true">
+    <span>ЗАПРЕТЫ И ОГРАНИЧЕНИЯ</span>
+    <span class="form-head__stamp-line"></span>
+    <span>ПП РФ 311 · 312 · 313</span>
+  </div>
+  <h1>Проверка ограничений по постановлениям 311, 312, 313</h1>
+  <p class="form-head__sub">Загрузите тексты постановлений и таблицу товаров — приложение
+  сверит каждый код ТН ВЭД с перечнями и вернёт исходную таблицу с добавленными графами.
+  Всё обрабатывается в браузере: файлы никуда не отправляются.</p>
+
+  <div class="warn-strip">
+    <b>Предварительная проверка, а не замена работе с первоисточником.</b>
+    Проверяется только код ТН ВЭД. Исключения по происхождению товара, направлению
+    вывоза, таможенной процедуре и статусу отправителя приложению неизвестны —
+    «нет» означает отсутствие совпадения по коду, а не отсутствие ограничений.
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <div class="chk-step">
+      <span class="chk-step__num">01</span>
+      <div class="chk-step__body">
+        <h2>Тексты постановлений</h2>
+        <p class="chk-hint">Файлы RTF с консолидированными редакциями — можно все три сразу.
+        Номер постановления определяется из текста документа. Приложение само отбрасывает
+        отменённые позиции и старые редакции, оставляя только действующие.</p>
+
+        <div class="drop drop--chk" id="chk-perechni-drop" tabindex="0" role="button"
+             aria-label="Загрузить тексты постановлений">
+          <div class="drop__icon" aria-hidden="true">⇩</div>
+          <p class="drop__title">Перетащите файлы постановлений или <span class="drop__link">выберите</span></p>
+          <p class="drop__hint">RTF · можно несколько файлов сразу</p>
+          <input type="file" id="chk-perechni-fajl" accept=".rtf" multiple hidden>
+        </div>
+
+        <p class="status" id="chk-perechni-soobshchenie" role="status"></p>
+        <div class="chk-status" id="chk-status" hidden></div>
+        <button class="btn chk-knopka-zabyt" id="chk-zabyt" type="button" hidden>Забыть перечни</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="chk-step is-locked" id="chk-shag-tovary">
+      <span class="chk-step__num">02</span>
+      <div class="chk-step__body">
+        <h2>Таблица товаров</h2>
+        <p class="chk-hint">XLSX · XLS · CSV. Шапку таблицы приложение находит само —
+        по названию графы с кодом («Код ТН ВЭД», «ТН ВЭД», «HS code»). Строки выше шапки,
+        а также «Итого» и сводные строки ниже списка товаров в проверку не попадают.</p>
+
+        <div class="drop drop--chk" id="chk-drop" tabindex="0" role="button"
+             aria-label="Загрузить таблицу товаров" aria-disabled="true">
+          <div class="drop__icon" aria-hidden="true">⇩</div>
+          <p class="drop__title">Перетащите таблицу сюда или <span class="drop__link">выберите файл</span></p>
+          <p class="drop__hint">XLSX · XLS · CSV</p>
+          <input type="file" id="chk-fajl" accept=".xlsx,.xls,.csv" hidden>
+        </div>
+
+        <p class="status" id="chk-soobshchenie" role="status"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel panel--result" id="chk-result-panel" hidden>
+    <div class="result-head">
+      <h2>Результат проверки</h2>
+      <div class="result-head__right">
+        <span class="legend"><i class="legend__swatch legend__swatch--red"></i>подпадает под ограничение</span>
+        <span class="legend"><i class="legend__swatch"></i>требует ручной проверки</span>
+        <button class="btn btn--primary" id="chk-skachat" type="button">Скачать XLSX</button>
+      </div>
+    </div>
+
+    <p class="chk-hint chk-hint--read">
+      «да» в графе исключения означает, что позиция выведена из-под ограничения:
+      товар под постановление <b>не подпадает</b>. Итоговый вывод — в последней графе.
+      Наведите курсор на «да», чтобы увидеть, какое приложение и какая позиция сработали.
+    </p>
+
+    <div class="table-wrap" id="chk-tablica"></div>
+  </section>
+</main>
+
+<footer class="foot">
+  <span>Перечни берутся только из загруженных файлов постановлений. Обращений к внешним сайтам нет.</span>
+  <span>Постановления действуют до 31 декабря 2027 года и не подлежат применению с 1 января 2028 года.</span>
+</footer>
+
+</div>
+<!-- ══════════ КОНЕЦ БЛОКА 2 ══════════ -->
+
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script src="app.js"></script>
-  <script src="ai-recognize.js"></script>
+<script src="ai-recognize.js"></script>
+<script src="checker.js"></script>
+<script src="tabs.js"></script>
 </body>
 </html>

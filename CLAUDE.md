@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-page Russian-language web app for customs declarants ("Заполнитель" helper, Альта-Софт). The user uploads commercial documents (invoice, packing list, specification) and the app merges them into one 26-column item table ready to import into the "Заполнитель" program. All document parsing happens client-side in the browser — files are never uploaded anywhere except when the optional AI-recognition feature sends document content to Claude via the app's own proxy server.
+A single-page Russian-language web app for customs declarants ("Заполнитель" helper, Альта-Софт), with two tabs (`tabs.js` switches between them, storing the active tab in `sessionStorage`):
+
+1. **Таблица товаров** (`app.js` + `ai-recognize.js`) — the user uploads commercial documents (invoice, packing list, specification) and the app merges them into one 26-column item table ready to import into the "Заполнитель" program.
+2. **Проверка ограничений 311·312·313** (`checker.js`) — cross-checks ТН ВЭД codes against the item lists of Russian government resolutions 311/312/313, which the user supplies as consolidated RTF files (from a legal-reference system export); parsed lists are cached in `localStorage` so they survive a reload. Entirely independent of tab 1's code — it only reuses the SheetJS (`XLSX`) global directly to read the item table (XLSX/XLS/CSV, must have a ТН ВЭД column) and produces its own XLSX export via ExcelJS. Ported from the sibling repo `zapolnitel-app`; see that repo's README for the full spec of the matching logic (prefix match on digits-only codes, exclusions, "проверить" cases, etc.) if extending this block.
+
+All document parsing happens client-side in the browser — files are never uploaded anywhere except when the optional AI-recognition feature (tab 1 only) sends document content to Claude via the app's own proxy server.
 
 There is no build step, no bundler, no test suite, and no linter — this is plain HTML/CSS/JS loading libraries from CDN.
 

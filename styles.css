@@ -165,6 +165,10 @@ tfoot td{font-weight:600;background:var(--paper)}
 .mode-toggle{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;color:var(--muted)}
 .mode-toggle select{font:inherit;font-size:.82rem;padding:6px 10px;border:1px solid var(--line);border-radius:4px;background:#fff;color:var(--ink);cursor:pointer}
 .mode-toggle select:focus{outline:2px solid var(--stamp);outline-offset:1px}
+
+/* Исправлено: у этого блока отсутствовало открывающее правило @media,
+   из-за чего браузер отбрасывал его целиком. */
+@media (prefers-reduced-motion:reduce){
   *{transition:none!important}
 }
 @media (max-width:640px){
@@ -178,3 +182,157 @@ tr.is-math-error td{background:#FFE0E0}
 tr.is-math-error td:first-child{box-shadow:inset 3px 0 0 #C0392B}
 .math-err{color:#C0392B;font-weight:600}
 .legend__swatch--red{background:#FFE0E0;border-color:#C0392B}
+
+
+/* ═══════════════════════════════════════════════════════════
+   БЛОК 2: проверка ограничений по постановлениям 311, 312, 313
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Корешки разделов ───────────────────────── */
+.tabs{
+  max-width:1180px;width:100%;margin:0 auto;
+  padding:20px 24px 0;
+  display:flex;gap:0;flex-wrap:wrap;
+  border-bottom:1px solid var(--ink);
+}
+.tab{
+  font:inherit;font-weight:600;font-size:.88rem;
+  display:inline-flex;align-items:center;gap:9px;
+  padding:11px 20px 10px;
+  border:1px solid var(--line);
+  border-bottom:none;
+  border-radius:var(--radius) var(--radius) 0 0;
+  background:var(--paper);
+  color:var(--muted);
+  cursor:pointer;
+  margin-bottom:-1px;
+  transition:background .15s,color .15s;
+}
+.tab + .tab{margin-left:-1px}
+.tab:hover{color:var(--ink);background:var(--panel)}
+.tab:focus-visible{outline:2px solid var(--stamp);outline-offset:-3px}
+.tab.is-active{
+  background:var(--panel);
+  color:var(--ink);
+  border-color:var(--ink);
+  border-bottom:1px solid var(--panel);
+}
+.tab__num{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:.66rem;letter-spacing:.1em;font-weight:600;
+  color:var(--stamp);
+  opacity:.65;
+}
+.tab.is-active .tab__num{opacity:1}
+
+.tab-panel{display:none}
+.tab-panel.is-active{display:block}
+
+/* Штамп второго раздела */
+.form-head__stamp--alt{
+  transform:rotate(1deg);
+  border-color:#A33B2E;color:#A33B2E;background:#FBEAE7;
+}
+.form-head__stamp--alt .form-head__stamp-line{background:#A33B2E}
+
+/* ── Полоса предупреждения ──────────────────── */
+.warn-strip{
+  border:1px solid var(--ink);
+  border-left:4px solid var(--mark);
+  background:var(--panel);
+  padding:12px 16px;
+  margin:0 0 26px;
+  font-size:.85rem;line-height:1.5;
+  max-width:80ch;
+}
+.warn-strip b{color:var(--ink)}
+
+/* ── Шаги ───────────────────────────────────── */
+.chk-step{display:flex;gap:16px;align-items:flex-start}
+.chk-step__num{
+  font-family:"IBM Plex Mono",monospace;
+  font-size:.72rem;font-weight:600;letter-spacing:.1em;
+  color:var(--stamp);
+  border:1.5px solid var(--stamp);
+  border-radius:3px;
+  padding:4px 8px;
+  flex-shrink:0;
+  margin-top:2px;
+}
+.chk-step__body{flex:1;min-width:0}
+.chk-step__body h2{margin:0 0 6px;font-size:1.05rem}
+
+.chk-hint{
+  margin:0 0 14px;
+  color:var(--muted);font-size:.83rem;line-height:1.5;
+  max-width:72ch;
+}
+.chk-hint--read{margin:0 0 12px}
+.chk-hint b{color:var(--ink)}
+
+.drop--chk{padding:26px 20px}
+
+.status.is-warn{color:var(--mark-ink);font-weight:500}
+
+.chk-knopka-zabyt{
+  margin-top:12px;
+  padding:6px 14px;
+  font-size:.8rem;
+  font-weight:500;
+  border-color:var(--line);
+  color:var(--muted);
+}
+.chk-knopka-zabyt:hover{border-color:var(--ink);color:var(--ink)}
+
+.chk-net-dannyh{color:var(--mark-ink)}
+
+/* Шаг недоступен, пока нет перечней */
+.chk-step.is-locked{opacity:.5}
+.chk-step.is-locked .drop{
+  border-style:solid;border-color:var(--line);
+  background:var(--paper);cursor:not-allowed;
+}
+.chk-step.is-locked .drop:hover{background:var(--paper);border-color:var(--line)}
+.chk-step.is-locked .drop__icon,
+.chk-step.is-locked .drop__link{color:var(--muted)}
+.chk-step.is-locked .drop__link{text-decoration:none}
+
+.chk-status{
+  margin-top:14px;
+  border:1px solid var(--line);
+  border-radius:4px;
+  background:#fff;
+  padding:10px 13px;
+  font-size:.78rem;line-height:1.6;
+  color:var(--muted);
+  font-family:"IBM Plex Mono",monospace;
+}
+.chk-status b{color:var(--ink);font-family:"IBM Plex Sans",sans-serif}
+.chk-status.is-stale{border-left:3px solid var(--mark);background:#FFFDF0}
+
+/* ── Таблица результата ─────────────────────── */
+#chk-tablica table{font-size:.78rem}
+#chk-tablica thead th{position:sticky;top:0;z-index:2}
+#chk-tablica .col-chk{
+  min-width:74px;
+  background:rgba(76,67,179,.07);
+}
+#chk-tablica .col-itog{min-width:190px}
+
+td.chk-da{background:#FFE0E0;color:#8F2B26;font-weight:600;text-align:center}
+td.chk-prov{background:var(--mark);color:var(--mark-ink);font-weight:600;text-align:center}
+td.chk-net{color:var(--muted);text-align:center}
+td.chk-pusto{text-align:center}
+td.cell-itog{
+  text-align:left;white-space:normal;min-width:190px;
+  font-family:"IBM Plex Sans",sans-serif;font-size:.75rem;
+}
+td.cell-itog.chk-da{background:#FFE0E0;font-weight:600}
+td.cell-itog.chk-prov{background:var(--mark)}
+
+@media (max-width:640px){
+  .tabs{padding:14px 12px 0}
+  .tab{padding:9px 12px 8px;font-size:.8rem}
+  .chk-step{gap:10px}
+  .chk-step__num{padding:3px 6px;font-size:.66rem}
+}
