@@ -1641,6 +1641,31 @@ function nameSimilarity(a, b) {
 }
 const FUZZY_THRESHOLD = 0.82; // допускаем ~18% отличающихся символов (искажения шрифта)
 
+/* ---------- Порядок строк итоговой таблицы --------------------------------
+   Товары нумеруются по инвойсу (счёту-фактуре): именно он задаёт порядок
+   товаров в декларации, тогда как упаковочный лист перечисляет те же товары
+   в порядке раскладки по грузовым местам. Ранг документа: 0 — инвойс,
+   счёт-фактура, спецификация; 2 — упаковочный лист; 1 — определить не
+   удалось. Товар, которого в инвойсе нет, встаёт после инвойсных строк. */
+const INVOICE_FILE_RE = /(инвойс|invoice|сч[её]т|факту|специфик|specificat|проформа|proforma)/i;
+const PACKING_FILE_RE = /(упаков|упак\.|packing|pack[-_ ]?list|отгрузочн)/i;
+
+function sourceRank(source, items) {
+  const name = source || "";
+  /* Имя файла — самый явный признак. Упаковочный лист проверяем первым:
+     в названии вида «Упаковочный лист к инвойсу №5» есть оба слова, и это
+     всё-таки упаковочный лист. */
+  if (PACKING_FILE_RE.test(name)) return 2;
+  if (INVOICE_FILE_RE.test(name)) return 0;
+  /* Имя ничего не говорит — судим по составу колонок: цена и стоимость
+     бывают только в инвойсе, вес и номера мест — только в упаковочном. */
+  const hasPrice  = items.some((it) => it.price !== null || it.total !== null);
+  const hasWeight = items.some((it) => it.netTotal !== null || it.gross !== null || it.place);
+  if (hasPrice && !hasWeight) return 0;
+  if (hasWeight && !hasPrice) return 2;
+  return 1;
+}
+
 function mergeItems(allItems) {
   /* Идентичность товара определяем по ПОЛНОМУ наименованию (nameFull), а не по
      очищенному it.name: очистка отбрасывает различающий суффикс (модель, ГОСТ,
@@ -1672,16 +1697,32 @@ function mergeItems(allItems) {
      группируются по наименованию и присоединяются к артикульной группе,
      если их наименование совпадает с наименованием одной из её позиций. */
   const allParts = [];
-  for (const [, m] of perFile) for (const [, it] of m) allParts.push(it);
+  const ordOfPart = [];            // параллельно allParts: {rank, seq} — место в документе
+  for (const [src, m] of perFile) {
+    const rank = sourceRank(src, [...m.values()]);
+    let seq = 0;
+    for (const [, it] of m) { allParts.push(it); ordOfPart.push({ rank, seq: seq++ }); }
+  }
 
   const groups = new Map();        // ключ группы → parts[]
-  const orderOf = new Map();       // ключ → индекс первого появления (порядок строк)
+  const orderOf = new Map();       // ключ → {rank, seq} строки-инвойса этой группы
   const artKeyOf = new Map();      // нормализованный артикул → ключ группы
   const nameToArtKey = new Map();  // нормализованное имя → ключ артикульной группы
 
+  /* Позиция группы в таблице — самая «инвойсная» из позиций её строк:
+     сначала документ с меньшим рангом, при равном ранге — строка выше. */
+  const ORD_LAST = { rank: 99, seq: Number.MAX_SAFE_INTEGER };
+  const ordCmp = (a, b) => {
+    a = a || ORD_LAST; b = b || ORD_LAST;
+    return (a.rank - b.rank) || (a.seq - b.seq);
+  };
+  const ordMin = (a, b) => (a === undefined ? b : b === undefined ? a : (ordCmp(a, b) <= 0 ? a : b));
+  const ordOfKeys = (keys) => keys.reduce((acc, k) => ordMin(acc, orderOf.get(k)), undefined);
+
   const pushTo = (key, it, idx) => {
-    if (!groups.has(key)) { groups.set(key, []); orderOf.set(key, idx); }
+    if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(it);
+    orderOf.set(key, ordMin(orderOf.get(key), ordOfPart[idx]));
   };
 
   /* Проход 1: позиции с артикулом → группа по артикулу. */
@@ -1706,10 +1747,10 @@ function mergeItems(allItems) {
     pushTo(key, it, idx);
   });
 
-  /* Порядок строк — по первому появлению товара в документах. */
+  /* Порядок строк — по появлению товара в инвойсе (см. sourceRank). */
   const byGoods = new Map(
     [...groups.keys()]
-      .sort((a, b) => orderOf.get(a) - orderOf.get(b))
+      .sort((a, b) => ordCmp(orderOf.get(a), orderOf.get(b)))
       .map((k) => [k, groups.get(k)])
   );
 
@@ -1757,6 +1798,7 @@ function mergeItems(allItems) {
         }
         byGoods.delete(baseKey);
         byGoods.set(baseKey + "~byArt~", mergedParts);
+        orderOf.set(baseKey + "~byArt~", ordOfKeys(singleSrcKeys));
       }
     }
   }
@@ -1832,6 +1874,7 @@ function mergeItems(allItems) {
           }
           byGoods.delete(mergedKey);
           byGoods.set(mergedKey + "~byArticle~", mergedParts);
+          orderOf.set(mergedKey + "~byArticle~", ordOfKeys(merged.map((idx) => groupKeys[idx])));
           merged.forEach((idx) => usedByArticle.add(idx));
         }
       }
@@ -1876,13 +1919,19 @@ function mergeItems(allItems) {
         byGoods.delete(keyA);
         byGoods.delete(keyB);
         byGoods.set(keyA + "~fuzzy~" + keyB, merged);
+        orderOf.set(keyA + "~fuzzy~" + keyB, ordOfKeys([keyA, keyB]));
         used.add(i); used.add(j);
       }
     }
   }
 
   const rows = [];
-  for (const [, parts] of byGoods) {
+  /* Дослияние выше выдаёт объединённой группе новый ключ, а Map кладёт его в
+     конец — поэтому порядок инвойса восстанавливаем ещё раз, уже перед
+     сборкой строк. */
+  const orderedKeys = [...byGoods.keys()].sort((a, b) => ordCmp(orderOf.get(a), orderOf.get(b)));
+  for (const gKey of orderedKeys) {
+    const parts = byGoods.get(gKey);
     /* суммы по каждому файлу — для сверки */
     const byFile = new Map();
     for (const p of parts) {
@@ -2177,7 +2226,7 @@ buildBtn.addEventListener("click", async () => {
       rows = mergeItems(all);
       distributeGross(rows);
     }
-    /* порядок строк — порядок появления товаров в документах (как в инвойсе) */
+    /* порядок строк задаёт инвойс (счёт-фактура) — см. sourceRank/mergeItems */
     state.rows = rows;
     state.footerErrors = footerErrors;
     await resolveNameLanguages(rows);
