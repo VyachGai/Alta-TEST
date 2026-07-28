@@ -14,6 +14,16 @@
   const MAX_PDF_PAGES = 6;      // ограничение страниц для сканов (стоимость/размер)
   const RENDER_SCALE = 2;       // масштаб рендера страницы скана в картинку
 
+  /* Ответ ИИ — это JSON-объект на каждую строку документа, он в разы длиннее
+     самой строки. Поэтому длинный документ разбиваем на части: иначе ответ
+     упирается в max_tokens, обрывается на середине строки и разбор падает с
+     «Unterminated string in JSON» — а файл молча уходит в локальный парсер.
+     CHUNK_CHARS подобран так, чтобы ответ на часть (примерно втрое длиннее
+     её самой) оставался заметно ниже MAX_OUT_TOKENS. */
+  const MAX_OUT_TOKENS = 20000; // лимит длины ответа на один запрос
+  const CHUNK_CHARS = 8000;     // сколько символов документа отдаём за запрос
+  const HEAD_CHARS = 1500;      // шапка документа, повторяемая как контекст
+
   const SYSTEM_PROMPT =
     "Ты — парсер коммерческих документов ВЭД (инвойсы, упаковочные листы, " +
     "спецификации) на русском, английском и китайском. Извлекаешь только " +
@@ -136,13 +146,59 @@
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         system: SYSTEM_PROMPT,
-        max_tokens: 8000,
+        max_tokens: MAX_OUT_TOKENS,
         messages: [{ role: "user", content: userContent }],
       }),
     });
     const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || "HTTP " + res.status);
+    if (!res.ok || data.error) {
+      /* Прокси отдаёт ошибку строкой, Claude API — объектом { type, message }. */
+      const e = data.error;
+      throw new Error(typeof e === "string" ? e : (e && e.message) || "HTTP " + res.status);
+    }
+    /* Обрыв по лимиту длины ловим здесь: иначе он проявится ниже как невнятная
+       ошибка разбора оборванного JSON. */
+    if (data.stop_reason === "max_tokens")
+      throw new Error("ответ ИИ обрезан по лимиту длины — документ слишком большой для одного запроса");
     return (data.content || []).map((b) => (b.type === "text" ? b.text : "")).join("");
+  }
+
+  /* Режет текст документа на части по границам строк. Первая часть содержит
+     настоящую шапку документа, остальным она передаётся отдельным блоком —
+     без неё ИИ не поймёт, что означают колонки. */
+  function splitDocText(text) {
+    if (text.length <= CHUNK_CHARS) return [{ head: "", body: text }];
+    const lines = text.split("\n");
+
+    let head = "";
+    for (const line of lines) {
+      if (head.length >= HEAD_CHARS) break;
+      head += line + "\n";
+    }
+
+    const bodies = [];
+    let cur = "";
+    for (const line of lines) {
+      if (cur && cur.length + line.length + 1 > CHUNK_CHARS) { bodies.push(cur); cur = ""; }
+      cur += line + "\n";
+    }
+    if (cur.trim()) bodies.push(cur);
+
+    return bodies.map((body, i) => ({ head: i === 0 ? "" : head, body }));
+  }
+
+  /* Собирает запрос по одной части документа. */
+  function chunkPrompt(part, index, total) {
+    let text = SCHEMA_INSTRUCTION;
+    if (total > 1) {
+      text += `\n\nДокумент разбит на части, это часть ${index + 1} из ${total}. ` +
+        "Извлекай позиции ТОЛЬКО из блока «ФРАГМЕНТ ДОКУМЕНТА»" +
+        (part.head ? ", а блок «ШАПКА ДОКУМЕНТА» используй лишь для понимания колонок — позиции из него не бери." : ".") +
+        "\nФрагмент может начинаться и обрываться на середине таблицы — неполные строки пропускай.";
+    }
+    if (part.head) text += "\n\n=== ШАПКА ДОКУМЕНТА ===\n" + part.head;
+    text += "\n\n=== ФРАГМЕНТ ДОКУМЕНТА ===\n" + part.body;
+    return [{ type: "text", text }];
   }
 
   function parseJsonLoose(text) {
@@ -203,22 +259,42 @@
 
   async function aiExtract(file) {
     const content = await getDocContent(file);
-    let userContent;
+
+    /* Скан: страницы уже ограничены MAX_PDF_PAGES, шлём одним запросом. */
     if (content.type === "images") {
-      userContent = content.images.map((b64) => ({
+      const userContent = content.images.map((b64) => ({
         type: "image",
         source: { type: "base64", media_type: "image/png", data: b64 },
       }));
       userContent.push({ type: "text", text: SCHEMA_INSTRUCTION });
-    } else {
-      userContent = [{
-        type: "text",
-        text: SCHEMA_INSTRUCTION + "\n\n=== ДОКУМЕНТ ===\n" + content.text,
-      }];
+      return finishItems(await askForItems(userContent), file);
     }
-    const answer = await callClaude(userContent);
-    const arr = parseJsonLoose(answer);
+
+    const parts = splitDocText(content.text);
+    let raw = [];
+    for (let i = 0; i < parts.length; i++) {
+      if (parts.length > 1 && typeof setStatus === "function")
+        setStatus(`ИИ распознаёт: ${file.name} — часть ${i + 1} из ${parts.length}…`);
+      raw = raw.concat(await askForItems(chunkPrompt(parts[i], i, parts.length)));
+    }
+
+    let items = finishItems(raw, file);
+    /* Товар в двуязычном документе описан двумя строками; граница частей
+       может пройти между ними, и тогда русская и английская строки приедут
+       из разных запросов по отдельности. Склеиваем их той же логикой, что и
+       локальный парсер. */
+    if (parts.length > 1 && typeof mergeTranslations === "function")
+      items = mergeTranslations(items);
+    return items;
+  }
+
+  async function askForItems(userContent) {
+    const arr = parseJsonLoose(await callClaude(userContent));
     if (!Array.isArray(arr)) throw new Error("ИИ вернул не JSON-массив");
+    return arr;
+  }
+
+  function finishItems(arr, file) {
     return arr.map((o) => toItem(o, file.name))
       .filter((it) => it.name || it.article)
       .map(fillBrandModelFallback);

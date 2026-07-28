@@ -1148,7 +1148,9 @@ function extractFromGrid(rows, fileName) {
 
 /* Двуязычные документы: один и тот же товар идёт двумя строками — русской
    и английской (перевод), с одинаковыми количеством, ценой и стоимостью.
-   Латинскую строку-перевод склеиваем с русской, не суммируя. */
+   Латинскую строку-перевод склеиваем с русской, не суммируя, а её
+   наименование сохраняем в графе «на иностранном языке» — это готовый
+   иностранный текст из документа, переводить такую позицию не нужно. */
 function mergeTranslations(items) {
   const eq = (a, b) => (a === null && b === null) || (a !== null && b !== null && Math.abs(a - b) < 0.01);
   const cyr = items.filter((it) => hasCyrillic(it.name));
@@ -1157,8 +1159,17 @@ function mergeTranslations(items) {
   const absorbed = new Set();
   for (const it of items) {
     if (hasCyrillic(it.name)) continue;
+    /* Позиция, у которой русское наименование взято из самого документа, —
+       самостоятельный товар, а не половина двуязычной пары. Машинный перевод
+       (nameTranslated) таким доказательством не считается: настоящая русская
+       строка документа его и должна вытеснить. */
+    if (it.nameRu && !it.nameTranslated) continue;
+    /* Совпадение по трём null'ам — не доказательство пары, а отсутствие
+       данных: требуем хотя бы одно реальное общее число. */
+    const hasEvidence = it.qty !== null || it.total !== null || it.price !== null;
+    if (!hasEvidence) continue;
     const twin = cyr.find((c) =>
-      !used.has(c) &&
+      !used.has(c) && !c.nameForeign &&
       eq(c.qty, it.qty) && eq(c.total, it.total) && eq(c.price, it.price) &&
       (!it.article || !c.article || normKey(it.article) === normKey(c.article)) &&
       (!it.place || !c.place || c.place === it.place)
@@ -1166,6 +1177,11 @@ function mergeTranslations(items) {
     if (twin) {
       used.add(twin);
       absorbed.add(it);
+      /* Обе графы наименования проставляем сразу: ensureNameLangs() позже
+         разбирает по алфавиту только те позиции, где обе графы пусты, —
+         заполнить одну и понадеяться на неё нельзя. */
+      if (!twin.nameRu)      twin.nameRu      = twin.nameFull || twin.name;
+      if (!twin.nameForeign) twin.nameForeign = it.nameForeign || it.nameFull || it.name;
       if (!twin.article && it.article) twin.article = it.article;
       if (!twin.unitRaw && it.unitRaw) twin.unitRaw = it.unitRaw;
       if (twin.netTotal === null) twin.netTotal = it.netTotal;
