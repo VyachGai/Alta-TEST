@@ -241,6 +241,174 @@ function parseNameParts(raw) {
   return { cleanName, brand, model };
 }
 
+/* ---------- Наименование на русском и на иностранном языке ---------------
+   Итоговая таблица всегда русскоязычная, поэтому наименование товара
+   разносится по двум графам. Источник значений — два независимых пути:
+   • ИИ-распознавание (ai-recognize.js) сразу возвращает nameRu/nameForeign
+     и, при необходимости, само выполняет перевод (nameTranslated);
+   • локальный разбор языка не знает — здесь работает эвристика по алфавиту
+     (splitNameLanguages), а недостающий русский текст добирается отдельным
+     запросом на перевод (translateNamesToRussian).                        */
+
+const RE_CYRILLIC = /[А-Яа-яЁё]/;
+/* Иностранные буквы: латиница (в т. ч. диакритика), CJK, кана, хангыль. */
+const RE_FOREIGN  = /[A-Za-zÀ-ɏ一-鿿぀-ヿ가-힯]/;
+
+const MT_WARNING = "машинный перевод, проверьте его правильность!";
+
+/* Похож ли фрагмент на самостоятельное наименование, а не на обозначение
+   стандарта, типоразмер или код («DIN 933», «M8x40», «PN16»)? Требуем либо
+   два словесных токена, либо одно слово от четырёх букв, либо два иероглифа. */
+function looksLikeForeignName(frag) {
+  if ((frag.match(/[一-鿿぀-ヿ가-힯]/g) || []).length >= 2) return true;
+  const words = frag.match(/[A-Za-zÀ-ɏ]{2,}/g) || [];
+  if (words.length >= 2) return true;
+  return words.length === 1 && words[0].length >= 4;
+}
+
+/* Разносит наименование по языкам: { ru, foreign }.
+   Одноязычная строка целиком уходит в свою графу; двуязычная режется надвое
+   по разделителю («/», «|», «;», перенос строки, три пробела) или по
+   замыкающей скобке. Если ни одно деление не даёт самостоятельного
+   иноязычного наименования, строка считается русской целиком — латиница
+   внутри неё это марка, модель или обозначение стандарта.                */
+function splitNameLanguages(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return { ru: "", foreign: "" };
+  /* Строка без слов (только код, размер, цифры) — не переводится, идёт в
+     русскую графу как есть. */
+  if (!/[A-Za-zÀ-ɏА-Яа-яЁё]{2,}/.test(s) && !/[一-鿿぀-ヿ가-힯]/.test(s))
+    return { ru: s, foreign: "" };
+  const hasRu  = RE_CYRILLIC.test(s);
+  const hasFor = RE_FOREIGN.test(s);
+  if (!hasFor) return { ru: s, foreign: "" };
+  if (!hasRu)  return { ru: "", foreign: s };
+
+  /* Смешанная строка. Режем НАДВОЕ по первому разделителю, который даёт
+     чисто русскую и чисто иностранную половины, — так ни один разделитель
+     внутри половины («Oil filter 1/2») не рвёт наименование на куски. */
+  const trySplit = (left, right) => {
+    left = left.trim(); right = right.trim();
+    if (!left || !right) return null;
+    const lRu = RE_CYRILLIC.test(left), rRu = RE_CYRILLIC.test(right);
+    if (lRu && !rRu && looksLikeForeignName(right)) return { ru: left, foreign: right };
+    if (rRu && !lRu && looksLikeForeignName(left))  return { ru: right, foreign: left };
+    return null;
+  };
+
+  /* Сильные разделители (перенос строки, «|», «;», слэш В ОКРУЖЕНИИ пробелов,
+     три и более пробелов) пробуем первыми: слэш без пробелов чаще всего часть
+     самого наименования — дюймовый размер «1/2», а не граница языков. */
+  const SEP_STRONG = /\r?\n|\s*[|;•]\s*|\s+\/{1,2}\s+|\s{3,}/g;
+  const SEP_WEAK   = /\/{1,2}/g;
+  for (const sepRe of [SEP_STRONG, SEP_WEAK]) {
+    sepRe.lastIndex = 0;
+    let m;
+    while ((m = sepRe.exec(s)) !== null) {
+      if (!m[0].length) { sepRe.lastIndex++; continue; }
+      const res = trySplit(s.slice(0, m.index), s.slice(m.index + m[0].length));
+      if (res) return res;
+    }
+  }
+
+  /* Замыкающая скобка: «Фильтр масляный (Oil filter)». */
+  const br = s.match(/^(.+?)\s*[(\[（]([^()\[\]（）]+)[)\]）]\s*$/);
+  if (br) {
+    const res = trySplit(br[1], br[2]);
+    if (res) return res;
+  }
+
+  /* Разделить не удалось — латиница внутри русского наименования (марка,
+     модель, обозначение стандарта). Наименование целиком русское. */
+  return { ru: s, foreign: "" };
+}
+
+/* Проставляет позиции nameRu/nameForeign, если их не дал ИИ. */
+function ensureNameLangs(it) {
+  if (it.nameRu || it.nameForeign) {
+    it.nameRu = it.nameRu || "";
+    it.nameForeign = it.nameForeign || "";
+    return it;
+  }
+  const parts = splitNameLanguages(it.nameFull || it.name);
+  it.nameRu = parts.ru;
+  it.nameForeign = parts.foreign;
+  return it;
+}
+
+/* Добавляет в замечания заполнителя предупреждение о машинном переводе. */
+function markMachineTranslated(row) {
+  if (row.comment && row.comment.includes(MT_WARNING)) return;
+  row.comment = row.comment ? row.comment + "; " + MT_WARNING : MT_WARNING;
+  row.flagged = true;
+}
+
+/* Перевод наименований на русский через прокси /api/anthropic.
+   Возвращает массив той же длины; непереведённые элементы — пустые строки. */
+async function translateNamesToRussian(names) {
+  const CHUNK = 40;
+  const out = [];
+  for (let i = 0; i < names.length; i += CHUNK) {
+    const part = names.slice(i, i + CHUNK);
+    const answer = await askClaude(
+      [{ role: "user", content:
+        "Переведи на русский язык наименования товаров из коммерческого документа ВЭД.\n" +
+        "Ответь ТОЛЬКО JSON-массивом строк: столько же элементов и в том же порядке, что во входном массиве.\n" +
+        "Перевод должен годиться для графы 31 декларации на товары: техническое наименование, без пояснений и комментариев.\n" +
+        "Артикулы, коды, типоразмеры, обозначения стандартов и латинские написания марок оставляй как есть.\n" +
+        "Если элемент перевести невозможно — верни для него пустую строку.\n\n" +
+        JSON.stringify(part) }],
+      { max_tokens: 8000,
+        system: "Ты — переводчик коммерческих документов ВЭД. Отвечаешь только валидным " +
+                "JSON-массивом строк — без markdown-обёрток и без пояснений." }
+    );
+    let t = String(answer).trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const a = t.indexOf("["), b = t.lastIndexOf("]");
+    if (a >= 0 && b > a) t = t.slice(a, b + 1);
+    const arr = JSON.parse(t);
+    if (!Array.isArray(arr)) throw new Error("перевод вернулся не JSON-массивом");
+    for (let k = 0; k < part.length; k++) out.push(typeof arr[k] === "string" ? arr[k].trim() : "");
+  }
+  return out;
+}
+
+/* Финальная раскладка наименований по графам для готовых строк таблицы.
+   Вызывается после сборки строк и до applyMathErrors.                     */
+async function resolveNameLanguages(rows) {
+  for (const row of rows) {
+    if (!row.nameRu && !row.nameForeign) {
+      const parts = splitNameLanguages(row.nameFull || row.name);
+      row.nameRu = parts.ru;
+      row.nameForeign = parts.foreign;
+    }
+    if (row.nameTranslated && row.nameRu) markMachineTranslated(row);
+  }
+
+  const pending = rows.filter((r) => !r.nameRu && r.nameForeign);
+  if (!pending.length) return;
+
+  setStatus(`Перевожу наименования на русский язык (${pending.length})…`);
+  try {
+    const translated = await translateNamesToRussian(pending.map((r) => r.nameForeign));
+    let failed = 0;
+    pending.forEach((row, i) => {
+      const t = translated[i] || "";
+      if (!t) { failed++; return; }
+      row.nameRu = t;
+      row.nameTranslated = true;
+      markMachineTranslated(row);
+    });
+    if (failed) {
+      state.notes.push(`Не удалось перевести наименования (${failed} шт.) — ` +
+        "заполните графу «Наименование товара на русском языке» вручную.");
+    }
+  } catch (err) {
+    state.notes.push(`Автоперевод наименований недоступен (${err.message}) — ` +
+      "графа «Наименование товара на русском языке» не заполнена для " +
+      `${pending.length} строк(и), заполните её вручную.`);
+  }
+}
+
 /* ---------- Ключевые слова для поиска колонок --------------------------- */
 /* Порядок важен: более специфичные поля проверяются раньше. */
 const FIELD_PATTERNS = [
@@ -1791,9 +1959,23 @@ function mergeItems(allItems) {
     const unitRaw = pick((p) => p.unitRaw) || "";
     const codes = unitCodes(unitRaw);
 
+    /* Настоящее русское наименование из документа всегда важнее машинного
+       перевода той же позиции из другого файла — и предупреждать о переводе
+       тогда не нужно. */
+    const nameRuFromDoc = pick((p) => (p.nameTranslated ? null : p.nameRu));
+    const nameRuAny = pick((p) => p.nameRu);
+
     rows.push({
       _parts: parts,
       name:      pick((p) => p.name) || "",
+      nameFull:  pick((p) => p.nameFull || p.name) || "",
+      /* Русское и иностранное наименования берём независимо друг от друга:
+         один и тот же товар может быть назван по-русски в одном документе
+         и на иностранном языке в другом — тогда обе графы заполнятся без
+         машинного перевода. */
+      nameRu:      nameRuFromDoc || nameRuAny || "",
+      nameForeign: pick((p) => p.nameForeign) || "",
+      nameTranslated: !nameRuFromDoc && !!nameRuAny,
       article:   pickConsensus((p) => p.article) || "",
       brand:     pickConsensus((p) => p.brand)   || "",
       model:     pickConsensus((p) => p.model)   || "",
@@ -1968,6 +2150,10 @@ buildBtn.addEventListener("click", async () => {
       buildBtn.disabled = false;
       return;
     }
+    /* Язык наименования определяем до слияния: тогда русское название из
+       одного документа и иностранное из другого сойдутся в одной строке. */
+    all.forEach(ensureNameLangs);
+
     let rows;
     if (mode === "rowbyrow") {
       rows = buildRowByRow(all);
@@ -1978,6 +2164,7 @@ buildBtn.addEventListener("click", async () => {
     /* порядок строк — порядок появления товаров в документах (как в инвойсе) */
     state.rows = rows;
     state.footerErrors = footerErrors;
+    await resolveNameLanguages(rows);
     applyMathErrors(rows, footerErrors);
     renderResult();
     setStatus(`Готово: товаров — ${rows.length}, обработано файлов — ${state.files.length}.`);
@@ -2050,6 +2237,10 @@ function buildRowByRow(allItems) {
 
     rows.push({
       name:      it.name || "",
+      nameFull:  it.nameFull || it.name || "",
+      nameRu:      it.nameRu || "",
+      nameForeign: it.nameForeign || "",
+      nameTranslated: !!it.nameTranslated,
       article:   it.article || "",
       brand:     it.brand || "",
       model:     it.model || "",
@@ -2146,7 +2337,8 @@ function renderResult() {
     tr.innerHTML =
       `<td>${i + 1}</td>` +
       `<td class="cell-file">${escapeHtml((r.sources || []).join("; "))}</td>` +
-      `<td class="cell-name">${escapeHtml(r.name)}</td>` +
+      `<td class="cell-name">${escapeHtml(r.nameForeign || "")}</td>` +
+      `<td class="cell-name">${escapeHtml(r.nameRu || "")}</td>` +
       `<td class="cell-sm">${escapeHtml(r.brand || "")}</td>` +
       `<td class="cell-sm">${escapeHtml(r.model || "")}</td>` +
       `<td class="cell-art">${escapeHtml(r.article)}</td>` +
@@ -2183,7 +2375,7 @@ function renderResult() {
   const netClass  = feErrs.some((e) => e.field === "netWeight")   ? ' class="cell-math-error"' : "";
   const grossClass= feErrs.some((e) => e.field === "grossWeight") ? ' class="cell-math-error"' : "";
   tfoot.innerHTML =
-    `<tr><td colspan="3">Итого</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>` +
+    `<tr><td colspan="4">Итого</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>` +
     `<td class="cell-xs">${fmt(sums.qty, 3)}</td><td></td><td class="cell-xs">${fmt(round2(sums.total), 2)}</td>` +
     `<td></td><td${netClass} class="cell-xs">${fmt(round3(sums.net), 3)}</td><td${grossClass} class="cell-xs">${fmt(round3(sums.gross), 3)}</td><td></td>` +
     `<td class="cell-remark">${feMsg ? `<span class="math-err">${escapeHtml(feMsg)}</span>` : ""}</td>` +
@@ -2226,7 +2418,8 @@ exportBtn.addEventListener("click", async () => {
   ws.columns = [
     { header: "№ п/п",                    key: "n",        width: 6  },
     { header: "Название файла загрузки",  key: "files",    width: 32 },
-    { header: "Наименование товара",      key: "name",     width: 40 },
+    { header: "Наименование товара на иностранном языке", key: "nameFor", width: 40 },
+    { header: "Наименование товара на русском языке",     key: "nameRu",  width: 40 },
     { header: "Марка",                    key: "brand",    width: 14 },
     { header: "Модель",                   key: "model",    width: 14 },
     { header: "Код изделия / артикул",    key: "art",      width: 20 },
@@ -2260,7 +2453,8 @@ exportBtn.addEventListener("click", async () => {
   state.rows.forEach((r, i) => {
     const row = ws.addRow({
       n: i + 1,
-      name: r.name,
+      nameFor: r.nameForeign || "",
+      nameRu:  r.nameRu || "",
       unum: r.unitNum || "",
       ulet: r.unitLet || "",
       qty: r.qty ?? "",
@@ -2292,7 +2486,7 @@ exportBtn.addEventListener("click", async () => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
       });
       if (r.comment) {
-        const noteCell = row.getCell("name");
+        const noteCell = row.getCell("nameRu");
         noteCell.note = r.comment;
       }
     }
@@ -2301,14 +2495,14 @@ exportBtn.addEventListener("click", async () => {
   const last = ws.rowCount + 1;
   const totalRow = ws.getRow(last);
   totalRow.getCell(1).value  = "Итого";
-  totalRow.getCell(14).value = { formula: `SUM(N2:N${last - 1})` };  // Количество
-  totalRow.getCell(16).value = { formula: `SUM(P2:P${last - 1})` };  // Общая стоимость
-  totalRow.getCell(18).value = { formula: `SUM(R2:R${last - 1})` };  // Нетто
-  totalRow.getCell(19).value = { formula: `SUM(S2:S${last - 1})` };  // Брутто
+  totalRow.getCell(15).value = { formula: `SUM(O2:O${last - 1})` };  // Количество
+  totalRow.getCell(17).value = { formula: `SUM(Q2:Q${last - 1})` };  // Общая стоимость
+  totalRow.getCell(19).value = { formula: `SUM(S2:S${last - 1})` };  // Нетто
+  totalRow.getCell(20).value = { formula: `SUM(T2:T${last - 1})` };  // Брутто
   totalRow.font = { bold: true };
-  totalRow.getCell(18).numFmt = "0.000";
   totalRow.getCell(19).numFmt = "0.000";
-  totalRow.getCell(16).numFmt = "#,##0.00";
+  totalRow.getCell(20).numFmt = "0.000";
+  totalRow.getCell(17).numFmt = "#,##0.00";
 
   ws.eachRow((row) => row.eachCell({ includeEmpty: true }, (cell) => {
     cell.border = {
@@ -2338,6 +2532,10 @@ async function askClaude(messages, opts = {}) {
     }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Ошибка прокси");
+  if (!res.ok || data.error) {
+    /* Прокси отдаёт строку, Claude API — объект { type, message }. */
+    const e = data.error;
+    throw new Error(typeof e === "string" ? e : (e && e.message) || "HTTP " + res.status);
+  }
   return (data.content || []).map((b) => (b.type === "text" ? b.text : "")).join("");
 }
