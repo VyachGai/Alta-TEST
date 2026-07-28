@@ -439,6 +439,14 @@ const FIELD_PATTERNS = [
   ["name",     /наименован|назван|описан|товар|description|goods|^name$|^item$|product(?!\s*(code|no\.?|#|id))|^product$|commodity/i],
 ];
 
+/* Заголовок колонки брутто, где вес указан ВМЕСТЕ с паллетами: именно такой
+   вес предъявляется на границе, поэтому при выборе между двумя колонками
+   брутто он главнее. Заголовок «without pallet» под шаблон не подходит:
+   «with» там — часть слова «without», и за ним идёт не «pallet».
+   Границу русского «с» задаём явным классом: \b в JS считает словом только
+   латиницу и цифры, поэтому перед кириллицей не срабатывает. */
+const PALLET_INCL_RE = /(\bwith\s*pallet|(^|[^а-яёa-z])с\s*(паллет|поддон)|включая\s*(паллет|поддон))/i;
+
 function detectField(headerText) {
   const h = String(headerText || "").trim();
   if (!h) return null;
@@ -955,11 +963,19 @@ function extractFromGrid(rows, fileName) {
         if (/total/.test(h)) { colMap["qty"] = c; break; }
       }
     }
-    /* Total G.W — берём вместо G.W/CTN (вес партии, не коробки) */
+    /* Брутто: упаковочный лист нередко даёт две колонки — без паллет и с
+       паллетами («TOTAL GW/KG without Pallet» и «TOTAL GW/KG with pallets»).
+       Берём вес С ПАЛЛЕТАМИ: именно он предъявляется на границе. Если такой
+       колонки нет — Total G.W вместо G.W/CTN (вес партии, а не коробки). */
     if (colMapAll["gross"] && colMapAll["gross"].length > 1) {
-      for (const c of colMapAll["gross"]) {
-        const h = String(hRow[c] || "").trim().toLowerCase();
-        if (/total/.test(h)) { colMap["gross"] = c; break; }
+      const headerOf = (c) => String(hRow[c] || "").trim().toLowerCase();
+      const withPallets = colMapAll["gross"].find((c) => PALLET_INCL_RE.test(headerOf(c)));
+      if (withPallets !== undefined) {
+        colMap["gross"] = withPallets;
+      } else {
+        for (const c of colMapAll["gross"]) {
+          if (/total/.test(headerOf(c))) { colMap["gross"] = c; break; }
+        }
       }
     }
     /* Total N.W — аналогично */
