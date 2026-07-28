@@ -639,6 +639,7 @@ function parseNum(v) {
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const round2 = (n) => Math.round(n * 100) / 100;
+const round4 = (n) => Math.round(n * 10000) / 10000;
 const normKey = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 const isTotalsRow = (s) => {
   const str = String(s || "").trim();
@@ -651,6 +652,13 @@ const isTotalsRow = (s) => {
   /* То же самое, но слово стоит в самом конце строки без разделителя
      («Total USD :», «Всего к оплате»). */
   if (/\b(итого|всего|итог|total|sum)[\s:.：、]*$/i.test(str)) return true;
+  /* Итоговая метка, где total стоит после названия документа:
+     «INVOICE TOTAL IN USD», «Order total», «Packing list total». */
+  if (/^\s*(invoice|order|shipment|packing|contract|инвойс|заказ)\b[^,;]{0,20}\b(total|итого)\b/i.test(str)) return true;
+  /* Английские упаковочные листы подписывают итог строки одним словом
+     «Amount» — в графе наименования это всегда итог, а не товар (как
+     наименование товара слово «amount» не встречается). */
+  if (/^\s*(total\s+|grand\s+)?amount\s*$/i.test(str)) return true;
   return false;
 };
 
@@ -1641,29 +1649,93 @@ function nameSimilarity(a, b) {
 }
 const FUZZY_THRESHOLD = 0.82; // допускаем ~18% отличающихся символов (искажения шрифта)
 
-/* ---------- Порядок строк итоговой таблицы --------------------------------
-   Товары нумеруются по инвойсу (счёту-фактуре): именно он задаёт порядок
-   товаров в декларации, тогда как упаковочный лист перечисляет те же товары
-   в порядке раскладки по грузовым местам. Ранг документа: 0 — инвойс,
-   счёт-фактура, спецификация; 2 — упаковочный лист; 1 — определить не
-   удалось. Товар, которого в инвойсе нет, встаёт после инвойсных строк. */
-const INVOICE_FILE_RE = /(инвойс|invoice|сч[её]т|факту|специфик|specificat|проформа|proforma)/i;
+/* ---------- Тип документа -------------------------------------------------
+   Тип нужен в двух местах: он задаёт порядок строк итоговой таблицы (её
+   нумерует инвойс — см. sourceRank) и правило сложения данных по файлам
+   (см. mergeItems): документы ОДНОГО типа описывают разные части поставки
+   — два инвойса на один товар везут разные партии, и количества надо
+   складывать; документы РАЗНЫХ типов описывают один и тот же товар с
+   разных сторон — там складывать нельзя, иначе вес и стоимость удвоятся. */
+const INVOICE_FILE_RE = /(инвойс|invoice|сч[её]т|факту|сч[-. ]?ф\b)/i;
+const SPEC_FILE_RE    = /(специфик|specificat|проформа|proforma)/i;
 const PACKING_FILE_RE = /(упаков|упак\.|packing|pack[-_ ]?list|отгрузочн)/i;
 
-function sourceRank(source, items) {
+function docKind(source, items) {
   const name = source || "";
   /* Имя файла — самый явный признак. Упаковочный лист проверяем первым:
      в названии вида «Упаковочный лист к инвойсу №5» есть оба слова, и это
      всё-таки упаковочный лист. */
-  if (PACKING_FILE_RE.test(name)) return 2;
-  if (INVOICE_FILE_RE.test(name)) return 0;
+  if (PACKING_FILE_RE.test(name)) return "packing";
+  if (INVOICE_FILE_RE.test(name)) return "invoice";
+  if (SPEC_FILE_RE.test(name))    return "spec";
   /* Имя ничего не говорит — судим по составу колонок: цена и стоимость
      бывают только в инвойсе, вес и номера мест — только в упаковочном. */
   const hasPrice  = items.some((it) => it.price !== null || it.total !== null);
   const hasWeight = items.some((it) => it.netTotal !== null || it.gross !== null || it.place);
-  if (hasPrice && !hasWeight) return 0;
-  if (hasWeight && !hasPrice) return 2;
-  return 1;
+  if (hasPrice && !hasWeight) return "invoice";
+  if (hasWeight && !hasPrice) return "packing";
+  return "other";
+}
+
+/* Тип документа для каждого загруженного файла. */
+function docKinds(allItems) {
+  const byFile = new Map();
+  for (const it of allItems) {
+    if (!byFile.has(it.source)) byFile.set(it.source, []);
+    byFile.get(it.source).push(it);
+  }
+  const kinds = new Map();
+  for (const [src, items] of byFile) kinds.set(src, docKind(src, items));
+  return kinds;
+}
+
+/* Порядок строк итоговой таблицы: инвойс задаёт нумерацию товаров в
+   декларации, упаковочный лист перечисляет те же товары в порядке раскладки
+   по местам. Товар, которого в инвойсе нет, встаёт после инвойсных строк. */
+const KIND_RANK = { invoice: 0, spec: 1, other: 1, packing: 2 };
+function sourceRank(source, items) {
+  return KIND_RANK[docKind(source, items)];
+}
+
+/* ---------- Сравнение по модели ------------------------------------------
+   Один и тот же телефон записан в упаковочном листе как «MAXVI X900 4G», а
+   в инвойсе — наименованием «Mobile phone» с моделью «Maxvi X900 4G черный»:
+   общее у них только модель, причём в инвойсе она уточнена цветом. Поэтому
+   модель сравниваем словами и считаем совпадением, когда более короткий
+   список слов является началом более длинного. Марку из начала убираем —
+   в одном документе она входит в модель, в другом стоит отдельной графой. */
+function modelWords(value, brand) {
+  let t = normKey(value).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const b = normKey(brand).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  if (b && (t === b || t.startsWith(b + " "))) t = t.slice(b.length).trim();
+  return t ? t.split(" ") : [];
+}
+
+/* Слова модели позиции: графа «Модель», иначе наименование (в упаковочных
+   листах модель отдельной графой не выделяют — «MAXVI C27i» и есть она). */
+function itemModelWords(it) {
+  const brand = it.brand || "";
+  const fromModel = modelWords(it.model, brand);
+  return fromModel.length ? fromModel : modelWords(it.nameFull || it.name, brand);
+}
+
+const wordsPrefixMatch = (a, b) => {
+  if (!a.length || !b.length) return false;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return false;
+  return true;
+};
+
+/* Модели двух групп позиций совместимы, если хотя бы у одной модель не
+   указана (сравнивать нечем) или если списки слов совпадают по началу. */
+function modelsCompatible(partsA, partsB) {
+  const modelOf = (parts) => {
+    for (const p of parts) { const w = modelWords(p.model, p.brand); if (w.length) return w; }
+    return [];
+  };
+  const a = modelOf(partsA), b = modelOf(partsB);
+  if (!a.length || !b.length) return true;
+  return wordsPrefixMatch(a, b);
 }
 
 function mergeItems(allItems) {
@@ -1671,14 +1743,26 @@ function mergeItems(allItems) {
      очищенному it.name: очистка отбрасывает различающий суффикс (модель, ГОСТ,
      типоразмер), из-за чего разные товары внутри одного файла — обычно строки
      инвойса без артикула — схлопывались бы в одну позицию и суммировали qty. */
+  const kinds = docKinds(allItems); // файл → тип документа (инвойс/упаковочный/…)
   const nameId = (it) => normKey(it.nameFull || it.name);
-  /* 1. Внутри файла: объединяем дубликаты по (наименование+артикул+место). */
+  /* Наименование различает товары не всегда: в инвойсах на технику все
+     строки называются одинаково («Mobile phone», «Автозапчасть»), а товар
+     задаёт отдельная графа «Модель». Без модели в ключе такие строки
+     схлопывались бы в одну позицию с суммой количеств.
+     Цена за единицу тоже входит в идентичность: одна и та же модель,
+     отгруженная по разным ценам, в декларации остаётся разными строками, а
+     объединение усредняло бы цену и ломало равенство «цена × кол-во =
+     стоимость». */
+  const modelId = (it) => normKey(it.model);
+  const priceId = (it) => (it.price === null || it.price === undefined ? "" : String(round4(it.price)));
+  /* 1. Внутри файла: объединяем дубликаты по (наименование+модель+цена+артикул+место). */
   const perFile = new Map(); // file → Map(key → item)
   for (const it of allItems) {
     const fkey = it.source;
     if (!perFile.has(fkey)) perFile.set(fkey, new Map());
     const m = perFile.get(fkey);
-    const key = nameId(it) + "|" + normKey(it.article) + "|" + normKey(it.place);
+    const key = nameId(it) + "|" + modelId(it) + "|" + priceId(it) +
+                "|" + normKey(it.article) + "|" + normKey(it.place);
     if (!m.has(key)) m.set(key, { ...it });
     else {
       const ex = m.get(key);
@@ -1697,11 +1781,13 @@ function mergeItems(allItems) {
      группируются по наименованию и присоединяются к артикульной группе,
      если их наименование совпадает с наименованием одной из её позиций. */
   const allParts = [];
-  const ordOfPart = [];            // параллельно allParts: {rank, seq} — место в документе
+  const ordOfPart = [];            // параллельно allParts: {rank, file, seq} — место в документе
+  let fileIdx = 0;
   for (const [src, m] of perFile) {
     const rank = sourceRank(src, [...m.values()]);
+    const file = fileIdx++;
     let seq = 0;
-    for (const [, it] of m) { allParts.push(it); ordOfPart.push({ rank, seq: seq++ }); }
+    for (const [, it] of m) { allParts.push(it); ordOfPart.push({ rank, file, seq: seq++ }); }
   }
 
   const groups = new Map();        // ключ группы → parts[]
@@ -1710,11 +1796,13 @@ function mergeItems(allItems) {
   const nameToArtKey = new Map();  // нормализованное имя → ключ артикульной группы
 
   /* Позиция группы в таблице — самая «инвойсная» из позиций её строк:
-     сначала документ с меньшим рангом, при равном ранге — строка выше. */
-  const ORD_LAST = { rank: 99, seq: Number.MAX_SAFE_INTEGER };
+     сначала документ с меньшим рангом, затем документы в порядке загрузки
+     (иначе строки нескольких инвойсов чередовались бы: первые строки всех
+     инвойсов, потом вторые), и уже внутри документа — строка выше. */
+  const ORD_LAST = { rank: 99, file: Number.MAX_SAFE_INTEGER, seq: Number.MAX_SAFE_INTEGER };
   const ordCmp = (a, b) => {
     a = a || ORD_LAST; b = b || ORD_LAST;
-    return (a.rank - b.rank) || (a.seq - b.seq);
+    return (a.rank - b.rank) || (a.file - b.file) || (a.seq - b.seq);
   };
   const ordMin = (a, b) => (a === undefined ? b : b === undefined ? a : (ordCmp(a, b) <= 0 ? a : b));
   const ordOfKeys = (keys) => keys.reduce((acc, k) => ordMin(acc, orderOf.get(k)), undefined);
@@ -1736,14 +1824,35 @@ function mergeItems(allItems) {
     if (nm && !nameToArtKey.has(nm)) nameToArtKey.set(nm, key);
   });
 
-  /* Проход 2: позиции без артикула → к артикульной группе по совпадению
-     наименования, иначе собственная группа по наименованию. */
+  /* Проход 2: позиции без артикула, но с ценой → группа по
+     наименованию+модели+цене. Разные цены на одну модель — разные строки
+     декларации (см. priceId), поэтому цена входит и в межфайловый ключ:
+     иначе строки одного инвойса, разделённые по цене на шаге 1, тут же
+     склеились бы обратно. */
+  const nameToPriceKey = new Map(); // «наименование|модель» → ключ первой ценовой группы
   allParts.forEach((it, idx) => {
-    if (normKey(it.article)) return;
+    if (normKey(it.article) || !priceId(it)) return;
     const nm = nameId(it);
-    const key = (nm && nameToArtKey.has(nm))
-      ? nameToArtKey.get(nm)
-      : "name|" + (nm || "«без наименования»");
+    /* Артикул надёжнее цены: если тот же товар в другом документе записан с
+       артикулом (в счёте-фактуре графа «Артикул» часто пустая, а в
+       спецификации заполнена), позиция идёт в его группу. */
+    if (nm && nameToArtKey.has(nm)) { pushTo(nameToArtKey.get(nm), it, idx); return; }
+    const nmModel = nm + "|" + modelId(it);
+    const key = "np|" + nmModel + "|" + priceId(it);
+    pushTo(key, it, idx);
+    if (!nameToPriceKey.has(nmModel)) nameToPriceKey.set(nmModel, key);
+  });
+
+  /* Проход 3: позиции без артикула и без цены (обычно строки упаковочного
+     листа) → к артикульной или ценовой группе с тем же наименованием,
+     иначе собственная группа по наименованию. */
+  allParts.forEach((it, idx) => {
+    if (normKey(it.article) || priceId(it)) return;
+    const nm = nameId(it);
+    const nmModel = nm + "|" + modelId(it);
+    const key = (nm && nameToArtKey.has(nm)) ? nameToArtKey.get(nm)
+      : nameToPriceKey.has(nmModel) ? nameToPriceKey.get(nmModel)
+      : "name|" + (nm || "«без наименования»") + "|" + modelId(it);
     pushTo(key, it, idx);
   });
 
@@ -1839,6 +1948,17 @@ function mergeItems(allItems) {
       const srcSetOf = (key) => new Set(byGoods.get(key).map((p) => p.source));
       const disjoint = (a, b) => ![...a].some((s) => b.has(s));
 
+      /* Типы документов, из которых собрана группа, и её цена за единицу. */
+      const sameKinds = (partsA, partsB) => {
+        const kindSet = (parts) => new Set(parts.map((p) => kinds.get(p.source) || "other"));
+        const a = kindSet(partsA), b = kindSet(partsB);
+        return a.size === b.size && [...a].every((k) => b.has(k));
+      };
+      const groupPrice = (parts) => {
+        for (const p of parts) if (p.price !== null && p.price !== undefined) return round4(p.price);
+        return null;
+      };
+
       const usedByArticle = new Set();
       /* Приоритет №1: точное совпадение артикула между непересекающимися по
          файлам группами — самый надёжный признак одного и того же товара,
@@ -1895,6 +2015,22 @@ function mergeItems(allItems) {
              (например «Connector male stud» и «Connector male stud - GE-10LRED-1/8»). */
           const qtyB = partsB.reduce((s, p) => (p.qty !== null ? s + p.qty : s), 0) || null;
           const nameB = stripNoise(normKey(partsB[0].name));
+          /* Разные модели — разные товары, как бы ни совпадали наименования.
+             В инвойсах на технику наименование у всех строк одно и то же
+             («Mobile phone»), а товар задаёт графа «Модель», поэтому без
+             этой проверки схожесть имён 1.0 склеивала бы X900 с B21ds up. */
+          if (!modelsCompatible(partsA, partsB)) continue;
+          /* Разные цены за единицу — разные партии. Без этой проверки
+             слияние по схожести наименований склеивало бы две строки
+             однотипных документов, а из склеенной группы в таблицу попало
+             бы только большее количество — партия потерялась бы целиком.
+             У документов РАЗНЫХ типов цена может отличаться законно
+             (инвойс в валюте контракта, спецификация в рублях), поэтому
+             сравниваем только однотипные. */
+          if (sameKinds(partsA, partsB)) {
+            const prA = groupPrice(partsA), prB = groupPrice(partsB);
+            if (prA !== null && prB !== null && prA !== prB) continue;
+          }
           const artA = normKey(partsA[0].article);
           const artB = normKey(partsB[0].article);
           const embedded = articleEmbeddedInName(artA, nameB) || articleEmbeddedInName(artB, nameA);
@@ -1943,12 +2079,17 @@ function mergeItems(allItems) {
       if (p.gross !== null)    a.gross = (a.gross ?? 0) + p.gross;
     }
     const discrepancies = [];
+    /* Данные одного товара из разных файлов НЕ складываем: документы пакета
+       (инвойс, спецификация, упаковочный лист) описывают одну и ту же
+       поставку с разных сторон, и сумма удвоила бы количество и вес.
+       Разные партии одного товара разъезжаются по разным строкам ещё на
+       группировке — по модели и цене (см. modelId/priceId). */
     const check = (field, label, tol) => {
       const vals = [...byFile.values()].map((a) => a[field]).filter((v) => v !== null);
       if (vals.length > 1 && Math.max(...vals) - Math.min(...vals) > tol)
         discrepancies.push(`${label}: ` + [...byFile.entries()]
           .filter(([, a]) => a[field] !== null)
-          .map(([f, a]) => `${f} — ${a[field]}`).join(", "));
+          .map(([f, a]) => `${f} — ${round3(a[field])}`).join(", "));
     };
     check("qty",   "количество", 0.0001);
     check("total", "стоимость",  0.01);
@@ -1987,9 +2128,10 @@ function mergeItems(allItems) {
       }
       return best.v;
     };
-    const filesWithQty   = [...byFile.values()].filter((a) => a.qty   !== null);
-    const filesWithTotal = [...byFile.values()].filter((a) => a.total !== null);
-    const filesWithNet   = [...byFile.values()].filter((a) => a.net   !== null);
+    const aggMax = (field, round) => {
+      const vals = [...byFile.values()].map((a) => a[field]).filter((v) => v !== null);
+      return vals.length ? round(Math.max(...vals)) : null;
+    };
 
     const places = [...new Set(parts.map((p) => p.place).filter(Boolean))];
 
@@ -2010,9 +2152,9 @@ function mergeItems(allItems) {
       if (p.gross !== null)    placeGross.set(pl, (placeGross.get(pl) ?? 0) + p.gross);
     }
 
-    const qty   = filesWithQty.length   ? Math.max(...filesWithQty.map((a) => a.qty))     : null;
-    const total = filesWithTotal.length ? Math.max(...filesWithTotal.map((a) => a.total)) : null;
-    const net   = filesWithNet.length   ? Math.max(...filesWithNet.map((a) => a.net))     : null;
+    const qty   = aggMax("qty",   round3);
+    const total = aggMax("total", round2);
+    const net   = aggMax("net",   round3);
 
     let price = pick((p) => p.price);
     if (price === null && total !== null && qty) price = round2(total / qty);
@@ -2071,7 +2213,12 @@ function mergeItems(allItems) {
   if (allSources.length > 1) {
     for (const row of rows) {
       const rowSources = new Set(row._parts ? row._parts.map((p) => p.source) : []);
-      row.absent = allSources.filter((s) => !rowSources.has(s));
+      /* Сообщаем только о документе, ТИП которого товар не подтверждает
+         вовсе: отсутствие в упаковочном листе — повод проверить, а вот
+         отсутствие в соседнем инвойсе нормально, ведь каждый инвойс везёт
+         свою часть поставки. */
+      const rowKinds = new Set([...rowSources].map((s) => kinds.get(s) || "other"));
+      row.absent = allSources.filter((s) => !rowSources.has(s) && !rowKinds.has(kinds.get(s) || "other"));
       if (row.absent.length) {
         row.flagged = true;
         row.comment = "Отсутствует в файле: " + row.absent.join(", ");
@@ -2140,6 +2287,68 @@ function distributeGross(rows) {
       });
     }
   }
+}
+
+/* ---------- Веса упаковочного листа на строки инвойса ---------------------
+   Упаковочный лист часто перечисляет товар одной строкой на модель («MAXVI
+   C27i» — 40 000 шт), тогда как инвойсы разбивают ту же модель на несколько
+   строк — по цвету и цене. Наименования при этом не совпадают вовсе
+   («Mobile phone» против «MAXVI C27i»), поэтому слияние по наименованию их
+   не связывает: вес остаётся отдельной строкой без цены, а у строк инвойса
+   пустуют графы веса.
+   Здесь весовая строка сопоставляется со строками инвойса по модели, и её
+   вес раскладывается между ними пропорционально количеству. Сопоставление
+   принимается, только если сумма количеств строк инвойса в точности равна
+   количеству из упаковочного листа — это и подтверждает, что найден весь
+   набор строк одной модели, а не похожий товар.                          */
+function attachPackingWeights(rows, kinds) {
+  const kindsOf = (r) => new Set((r.sources || []).map((s) => kinds.get(s) || "other"));
+  const weightRows = rows.filter((r) =>
+    (r.netTotal !== null || r.gross !== null) && r.total === null && r.price === null &&
+    r.qty !== null && [...kindsOf(r)].every((k) => k === "packing"));
+  const priceRows = rows.filter((r) =>
+    (r.total !== null || r.price !== null) && r.netTotal === null && r.gross === null && r.qty !== null);
+  if (!weightRows.length || !priceRows.length) return rows;
+
+  const taken = new Set();  // строки инвойса, уже получившие вес
+  const spent = new Set();  // весовые строки, разложенные по строкам инвойса
+  for (const w of weightRows) {
+    const wWords = itemModelWords(w);
+    if (!wWords.length || !w.qty) continue;
+    const matches = priceRows.filter((p) => !taken.has(p) && wordsPrefixMatch(wWords, itemModelWords(p)));
+    if (!matches.length) continue;
+    const qtySum = matches.reduce((s, p) => s + p.qty, 0);
+    if (Math.abs(qtySum - w.qty) > 0.001) continue; // набор строк неполный — не наш случай
+
+    let accNet = 0, accGross = 0;
+    matches.forEach((p, i) => {
+      const last = i === matches.length - 1;
+      if (w.netTotal !== null) {
+        const share = last ? round3(w.netTotal - accNet) : round3(w.netTotal * p.qty / w.qty);
+        accNet = round3(accNet + share);
+        p.netTotal = round3((p.netTotal ?? 0) + share);
+        if (p.qty) p.netUnit = round3(p.netTotal / p.qty);
+      }
+      if (w.gross !== null) {
+        const share = last ? round3(w.gross - accGross) : round3(w.gross * p.qty / w.qty);
+        accGross = round3(accGross + share);
+        p.gross = round3((p.gross ?? 0) + share);
+      }
+      p.places  = [...new Set([...(p.places  || []), ...(w.places  || [])])];
+      p.sources = [...new Set([...(p.sources || []), ...(w.sources || [])])];
+      /* Товар нашёлся в упаковочном листе — замечание о его отсутствии там
+         больше не нужно. */
+      p.absent = (p.absent || []).filter((s) => !w.sources.includes(s));
+      const notes = [];
+      if (p.absent.length) notes.push("Отсутствует в файле: " + p.absent.join(", "));
+      if (p.discrepancies && p.discrepancies.length) notes.push(...p.discrepancies);
+      p.comment = notes.join("; ");
+      p.flagged = notes.length > 0;
+      taken.add(p);
+    });
+    spent.add(w);
+  }
+  return spent.size ? rows.filter((r) => !spent.has(r)) : rows;
 }
 
 /* ---------- Сборка -------------------------------------------------------- */
@@ -2225,6 +2434,7 @@ buildBtn.addEventListener("click", async () => {
     } else {
       rows = mergeItems(all);
       distributeGross(rows);
+      rows = attachPackingWeights(rows, docKinds(all));
     }
     /* порядок строк задаёт инвойс (счёт-фактура) — см. sourceRank/mergeItems */
     state.rows = rows;
