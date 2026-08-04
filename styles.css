@@ -330,6 +330,21 @@ td.cell-itog{
 td.cell-itog.chk-da{background:#FFE0E0;font-weight:600}
 td.cell-itog.chk-prov{background:var(--mark)}
 
+/* ── Маркировка «Честный знак» ───────────────── */
+.form-head__stamp--chz{
+  transform:rotate(-1deg);
+  border-color:#1F6B4E;color:#1F6B4E;background:#E7F3EC;
+}
+.form-head__stamp--chz .form-head__stamp-line{background:#1F6B4E}
+
+#chz-tablica table{font-size:.78rem}
+#chz-tablica thead th{position:sticky;top:0;z-index:2}
+#chz-tablica .col-chz{
+  min-width:230px;
+  background:rgba(31,107,78,.09);
+}
+#chz-tablica td.cell-itog{min-width:230px;max-width:460px}
+
 @media (max-width:640px){
   .tabs{padding:14px 12px 0}
   .tab{padding:9px 12px 8px;font-size:.8rem}

@@ -22,6 +22,11 @@
     <span class="tab__num">02</span>
     Проверка ограничений 311 · 312 · 313
   </button>
+  <button class="tab" id="tab-btn-markirovka" role="tab"
+          aria-selected="false" aria-controls="tab-markirovka" data-tab="tab-markirovka">
+    <span class="tab__num">03</span>
+    Маркировка «Честный знак»
+  </button>
 </nav>
 
 <!-- ══════════ БЛОК 1: сборка таблицы товаров ══════════ -->
@@ -240,6 +245,110 @@
 <!-- ══════════ КОНЕЦ БЛОКА 2 ══════════ -->
 
 
+<!-- ══════════ БЛОК 3: маркировка «Честный знак» ══════════ -->
+<div class="tab-panel" id="tab-markirovka" role="tabpanel"
+     aria-labelledby="tab-btn-markirovka" hidden>
+
+<header class="form-head">
+  <div class="form-head__stamp form-head__stamp--chz" aria-hidden="true">
+    <span>СРЕДСТВА ИДЕНТИФИКАЦИИ</span>
+    <span class="form-head__stamp-line"></span>
+    <span>ЧЕСТНЫЙ ЗНАК</span>
+  </div>
+  <h1>Маркировка «Честный знак»</h1>
+  <p class="form-head__sub">Загрузите сводный перечень маркируемых товаров и таблицу товаров —
+  приложение вернёт вашу таблицу в неизменном виде с одной добавленной графой
+  «Честный знак»: <b>требуется</b>, <b>проверьте вручную</b> или <b>не требуется</b>.
+  Всё обрабатывается в браузере: файлы никуда не отправляются.</p>
+
+  <div class="warn-strip">
+    <b>Предварительная проверка, а не замена работе с первоисточником.</b>
+    Сверяется только код ТН ВЭД. Наименование товара, вид упаковки, объём и масса,
+    назначение и наличие свидетельства о госрегистрации приложению неизвестны —
+    «не требуется» означает отсутствие совпадения по коду, а не отсутствие
+    обязанности маркировать.
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <div class="chk-step">
+      <span class="chk-step__num">01</span>
+      <div class="chk-step__body">
+        <h2>Сводный перечень маркируемых товаров</h2>
+        <p class="chk-hint">Файл RTF «Сводный перечень товаров, подлежащих маркировке
+        средствами идентификации» — выгрузка из справочно-правовой системы. Приложение
+        само разбирает графы «Код ТН ВЭД», «Срок введения», «Примечание» и отделяет
+        эксперименты от обязательной маркировки.</p>
+
+        <div class="drop drop--chk" id="chz-perechen-drop" tabindex="0" role="button"
+             aria-label="Загрузить сводный перечень">
+          <div class="drop__icon" aria-hidden="true">⇩</div>
+          <p class="drop__title">Перетащите файл перечня или <span class="drop__link">выберите</span></p>
+          <p class="drop__hint">RTF</p>
+          <input type="file" id="chz-perechen-fajl" accept=".rtf" hidden>
+        </div>
+
+        <p class="status" id="chz-perechen-soobshchenie" role="status"></p>
+        <div class="chk-status" id="chz-status" hidden></div>
+        <button class="btn chk-knopka-zabyt" id="chz-zabyt" type="button" hidden>Забыть перечень</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="chk-step is-locked" id="chz-shag-tovary">
+      <span class="chk-step__num">02</span>
+      <div class="chk-step__body">
+        <h2>Таблица товаров</h2>
+        <p class="chk-hint">XLSX · XLS · CSV, вид таблицы произвольный. Нужны графа
+        с кодом ТН ВЭД и графа с наименованием товара — шапку приложение находит само.
+        Исходные данные не меняются: в копии файла появляется только последняя графа
+        «Честный знак».</p>
+
+        <div class="drop drop--chk" id="chz-drop" tabindex="0" role="button"
+             aria-label="Загрузить таблицу товаров" aria-disabled="true">
+          <div class="drop__icon" aria-hidden="true">⇩</div>
+          <p class="drop__title">Перетащите таблицу сюда или <span class="drop__link">выберите файл</span></p>
+          <p class="drop__hint">XLSX · XLS · CSV</p>
+          <input type="file" id="chz-fajl" accept=".xlsx,.xls,.csv" hidden>
+        </div>
+
+        <p class="status" id="chz-soobshchenie" role="status"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel panel--result" id="chz-result-panel" hidden>
+    <div class="result-head">
+      <h2>Результат проверки</h2>
+      <div class="result-head__right">
+        <span class="legend"><i class="legend__swatch legend__swatch--red"></i>маркировка требуется</span>
+        <span class="legend"><i class="legend__swatch"></i>проверьте вручную</span>
+        <button class="btn btn--primary" id="chz-skachat" type="button">Скачать XLSX</button>
+      </div>
+    </div>
+
+    <p class="chk-hint chk-hint--read">
+      Примечание перечня («за исключением …», «кроме …») копируется в графу вслед
+      за словом «требуется» — прочитайте его: оно может выводить ваш товар
+      из-под маркировки. Наведите курсор на графу, чтобы увидеть, какая позиция
+      перечня сработала.
+    </p>
+
+    <div class="table-wrap" id="chz-tablica"></div>
+  </section>
+</main>
+
+<footer class="foot">
+  <span>Перечень берётся только из загруженного файла. Обращений к внешним сайтам нет.</span>
+  <span>Эксперименты по маркировке обязанности не создают — они упоминаются в графе справочно.</span>
+</footer>
+
+</div>
+<!-- ══════════ КОНЕЦ БЛОКА 3 ══════════ -->
+
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -247,6 +356,7 @@
 <script src="app.js"></script>
 <script src="ai-recognize.js"></script>
 <script src="checker.js"></script>
+<script src="chestny-znak.js"></script>
 <script src="tabs.js"></script>
 </body>
 </html>
